@@ -8,45 +8,72 @@
 <style>
   :root{
     --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --muted:#8a94a3;
-    --accent:#3fa7ff; --ok:#3ccf7a; --ng:#ff5d5d;
+    --accent:#3fa7ff; --ok:#3ccf7a; --ng:#ff5d5d; --on:#f5a524;
+    --stick:min(190px,48vw,55vh);
   }
   *{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
-    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;overscroll-behavior:none}
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;overscroll-behavior:none;overflow:hidden}
   body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
-  header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
-  header h1{font-size:15px;font-weight:600;margin:0;flex:1}
+  header{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--line)}
+  header h1{font-size:14px;font-weight:600;margin:0;flex:1}
   .dot{width:10px;height:10px;border-radius:50%;background:var(--ng)}
   .dot.on{background:var(--ok)}
-  #status{font-size:13px;color:var(--muted)}
-  #connectBtn{border:0;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:600;background:var(--accent);color:#fff}
+  #status{font-size:12px;color:var(--muted)}
+  #connectBtn{border:0;border-radius:8px;padding:7px 14px;font-size:14px;font-weight:600;background:var(--accent);color:#fff}
   #connectBtn.disconnect{background:#3a424e}
-  #warn{display:none;margin:10px 14px 0;padding:10px 12px;border-radius:8px;background:#3a2a12;color:#ffcf85;font-size:13px;line-height:1.5}
-  main{flex:1;display:flex;align-items:center;justify-content:space-around;gap:20px;padding:16px;touch-action:none}
-  @media (orientation:portrait){ main{flex-direction:column;justify-content:space-evenly} }
+  #warn{display:none;margin:8px 12px 0;padding:8px 10px;border-radius:8px;background:#3a2a12;color:#ffcf85;font-size:13px;line-height:1.5}
 
-  /* ジョイスティック */
-  #pad{position:relative;width:210px;height:210px;border-radius:50%;background:var(--panel);
-    border:2px solid var(--line);touch-action:none}
-  #pad::before,#pad::after{content:"";position:absolute;background:var(--line)}
-  #pad::before{left:50%;top:12%;bottom:12%;width:1px}
-  #pad::after{top:50%;left:12%;right:12%;height:1px}
-  #knob{position:absolute;width:84px;height:84px;left:50%;top:50%;margin:-42px 0 0 -42px;border-radius:50%;
+  main{flex:1;display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"l c r";
+    align-items:center;justify-items:center;gap:14px;padding:10px 16px;touch-action:none}
+  @media (orientation:portrait){
+    main{grid-template-columns:1fr;grid-template-areas:"l" "c" "r";align-content:space-evenly}
+  }
+  #left{grid-area:l} #center{grid-area:c} #stick{grid-area:r}
+  #left,#center{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .lbl{font-size:11px;color:var(--muted);text-align:center;letter-spacing:.05em}
+  .val{font-size:12px;color:var(--muted);text-align:center;margin-top:4px;font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,monospace}
+
+  /* スイッチ */
+  .sws{display:flex;gap:10px;justify-content:center}
+  .sw{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .seg{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+  .seg button{width:84px;height:36px;border:0;background:transparent;color:var(--muted);font-size:13px;font-weight:600;touch-action:none}
+  .seg button+button{border-top:1px solid var(--line)}
+  .seg button.on{background:var(--on);color:#1a1200}
+  .seg button.on.stop{background:var(--ng);color:#fff}
+
+  /* ルート選択ボタン */
+  #route{font-size:13px;color:var(--text);font-weight:600;min-height:18px;transition:color .2s}
+  #route.decided{color:var(--ok)}
+  .btnrow{display:flex;gap:8px;margin-top:6px}
+  .pb{height:46px;min-width:76px;padding:0 10px;border:0;border-radius:10px;background:#2a313b;color:var(--text);
+    font-size:14px;font-weight:700;touch-action:none}
+  .pb.ok{background:var(--accent);color:#fff;min-width:68px}
+  .pb.pressed{filter:brightness(1.4);transform:scale(.95)}
+
+  /* スライダー */
+  #slider{width:min(260px,80vw)}
+  .track{position:relative;height:44px;touch-action:none}
+  .rail{position:absolute;left:16px;right:16px;top:50%;height:8px;margin-top:-4px;border-radius:4px;background:var(--line)}
+  .fill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:4px;background:var(--accent)}
+  .thumb{position:absolute;top:50%;left:0;width:30px;height:30px;margin-top:-15px;border-radius:50%;
+    background:#e8ecf1;box-shadow:0 2px 8px rgba(0,0,0,.5);transform:translateX(-50%);pointer-events:none}
+  .ends{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:0 4px}
+
+  /* スティック（四角い可動域：斜めいっぱいで X=±100, Y=±100） */
+  .pad{position:relative;width:var(--stick);height:var(--stick);border-radius:22px;background:var(--panel);
+    border:2px solid var(--line);touch-action:none;margin-top:4px}
+  .pad::before,.pad::after{content:"";position:absolute;background:var(--line)}
+  .pad::before{left:50%;top:10%;bottom:10%;width:1px}
+  .pad::after{top:50%;left:10%;right:10%;height:1px}
+  .knob{position:absolute;width:36%;height:36%;left:32%;top:32%;border-radius:50%;
     background:radial-gradient(circle at 35% 30%,#5bb6ff,#1f6fc0);box-shadow:0 4px 14px rgba(0,0,0,.5);z-index:1;pointer-events:none}
-  #joyVal{text-align:center;font-size:12px;color:var(--muted);margin-top:8px;font-variant-numeric:tabular-nums}
 
-  /* ボタン（ひし形配置） */
-  #btns{display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(3,72px);gap:6px}
-  .b{border:0;border-radius:50%;font-size:22px;font-weight:700;color:#fff;touch-action:none}
-  .b:active,.b.pressed{filter:brightness(1.35);transform:scale(.94)}
-  .b[data-id="Y"]{grid-area:1/2;background:#c9a227}
-  .b[data-id="X"]{grid-area:2/1;background:#2f7fd6}
-  .b[data-id="B"]{grid-area:2/3;background:#d64545}
-  .b[data-id="A"]{grid-area:3/2;background:#2fa65a}
-
-  footer{padding:8px 14px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);
-    display:flex;gap:10px;align-items:center}
-  footer span{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--text);font-family:ui-monospace,Menlo,monospace}
+  footer{padding:5px 12px 8px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);
+    display:flex;gap:14px;align-items:center}
+  footer .grow{flex:1;min-width:0;display:flex;gap:6px}
+  footer span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--text);font-family:ui-monospace,Menlo,monospace}
 </style>
 </head>
 <body>
@@ -59,33 +86,90 @@
 <div id="warn">このブラウザはWeb Bluetoothに対応していません。iPhoneでは <b>Bluefy</b> アプリでこのページを開いてください。</div>
 
 <main>
-  <div>
-    <div id="pad"><div id="knob"></div></div>
-    <div id="joyVal">X: 0　Y: 0</div>
-  </div>
-  <div id="btns">
-    <button class="b" data-id="Y">Y</button>
-    <button class="b" data-id="X">X</button>
-    <button class="b" data-id="B">B</button>
-    <button class="b" data-id="A">A</button>
-  </div>
+  <!-- 左：三段スイッチ＋ルート選択 -->
+  <section id="left">
+    <div class="sws">
+      <div class="sw" data-key="face"><div class="lbl">三段SW1</div>
+        <div class="seg">
+          <button data-v="1">両面</button>
+          <button data-v="0" class="on stop">停止</button>
+          <button data-v="2">上面</button>
+        </div></div>
+      <div class="sw" data-key="run"><div class="lbl">三段SW2</div>
+        <div class="seg">
+          <button data-v="1">記録</button>
+          <button data-v="0" class="on">スタンバイ</button>
+          <button data-v="2">手動</button>
+        </div></div>
+    </div>
+    <div>
+      <div id="route" class="lbl">ルート —</div>
+      <div class="btnrow">
+        <button class="pb" data-ev="RD">ルート −1</button>
+        <button class="pb ok" data-ev="OK">決定</button>
+        <button class="pb" data-ev="RU">ルート +1</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 中央：二段スイッチ＋スライダー -->
+  <section id="center">
+    <div class="sws">
+      <div class="sw" data-key="pause"><div class="lbl">二段SW1</div>
+        <div class="seg">
+          <button data-v="0" class="on">通常</button>
+          <button data-v="1" class="stop">一時停止</button>
+        </div></div>
+      <div class="sw" data-key="rec"><div class="lbl">二段SW2</div>
+        <div class="seg">
+          <button data-v="0" class="on">通常</button>
+          <button data-v="1">記録</button>
+        </div></div>
+    </div>
+    <div id="slider">
+      <div class="lbl">スライダー <span id="slVal">0</span></div>
+      <div class="track" id="track"><div class="rail" id="rail"><div class="fill" id="fill"></div><div class="thumb" id="thumb"></div></div></div>
+      <div class="ends"><span>0 収納</span><span>展開 100</span></div>
+    </div>
+  </section>
+
+  <!-- 右：移動スティック -->
+  <section id="stick">
+    <div class="lbl">移動</div>
+    <div class="pad"><div class="knob"></div></div>
+    <div class="val">X 0　Y 0</div>
+  </section>
 </main>
 
-<footer>ESP32から: <span id="rx">—</span></footer>
+<footer>
+  <div class="grow">送信: <span id="tx">—</span></div>
+  <div class="grow">ESP32: <span id="rx">—</span></div>
+</footer>
 
 <script>
 // Nordic UART Service（ESP32側スケッチと同じUUID）
 const SVC = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const RX  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // iPhone → ESP32（書き込み）
 const TX  = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // ESP32 → iPhone（通知）
-const SEND_INTERVAL_MS = 100; // ジョイスティック値の送信間隔（ESP32側の安全停止の生存信号も兼ねる）
+const SEND_INTERVAL_MS = 100; // 変化がなくてもこの間隔で状態を送る（ESP32側の安全停止の生存信号）
 
 const $ = id => document.getElementById(id);
 const enc = new TextEncoder(), dec = new TextDecoder();
 
-let device = null, rxChar = null, busy = false;
-const queue = [];          // ボタンイベント（取りこぼさないよう順番に送る）
-let joy = {x:0, y:0}, joyDirty = false, timer = null;
+// 状態（1行にまとめて送る）: S,X,Y,三段SW1,三段SW2,二段SW1,二段SW2,スライダー
+//   三段SW1 face : 0=停止 1=両面 2=上面
+//   三段SW2 run  : 0=スタンバイ 1=記録 2=手動
+//   二段SW1 pause: 0=通常 1=一時停止
+//   二段SW2 rec  : 0=通常 1=記録
+//   スライダー   : 0=収納 〜 100=展開
+const state = {x:0, y:0, face:0, run:0, pause:0, rec:0, arm:0};
+const frame = () => { const s = state;
+  return `S,${s.x},${s.y},${s.face},${s.run},${s.pause},${s.rec},${s.arm}`; };
+
+// ボタンは押した瞬間のイベントとして送る: E,RU（ルート+1） E,RD（ルート-1） E,OK（決定） E,SYNC（接続直後の同期）
+const events = [];
+
+let device = null, rxChar = null, busy = false, dirty = true, timer = null;
 
 if (!navigator.bluetooth) $('warn').style.display = 'block';
 
@@ -97,12 +181,15 @@ function setStatus(connected, text){
   btn.classList.toggle('disconnect', connected);
 }
 
-// ---- 送信処理：BLEは同時に1件しか書き込めないので、1件ずつ順番に流す ----
+// ---- 送信：ボタンのイベントを優先し、状態は常に最新だけを送る ----
+function changed(){ dirty = true; $('tx').textContent = frame(); pump(); }
+function sendEvent(ev){ events.push(`E,${ev}`); pump(); }
 async function pump(){
   if (busy || !rxChar) return;
-  let msg = queue.shift();
-  if (msg === undefined && joyDirty){ msg = `J,${joy.x},${joy.y}`; joyDirty = false; }
-  if (msg === undefined) return;
+  let msg;
+  if (events.length) msg = events.shift();
+  else if (dirty){ msg = frame(); dirty = false; }
+  else return;
   busy = true;
   try {
     const data = enc.encode(msg + '\n');
@@ -112,10 +199,28 @@ async function pump(){
     console.warn('送信失敗', e);
   } finally {
     busy = false;
-    if (queue.length || joyDirty) pump();
+    if (events.length || dirty) pump();
   }
 }
-function send(msg){ queue.push(msg); pump(); }
+
+// ---- ESP32からの通知 ----
+//   R,n : 選択中のルート番号   D,n : ルートnを決定した
+let decidedTimer = null;
+function onNotify(text){
+  $('rx').textContent = text;
+  const m = text.match(/^([RD]),(\d+)/);
+  if (!m) return;
+  const el = $('route');
+  if (m[1] === 'R'){
+    el.textContent = `ルート ${m[2]}`;
+    el.classList.remove('decided');
+  } else {
+    el.textContent = `ルート ${m[2]} 決定`;
+    el.classList.add('decided');
+    clearTimeout(decidedTimer);
+    decidedTimer = setTimeout(() => el.classList.remove('decided'), 1500);
+  }
+}
 
 // ---- 接続 / 切断 ----
 async function connect(){
@@ -132,11 +237,11 @@ async function connect(){
     rxChar = await service.getCharacteristic(RX);
     const txChar = await service.getCharacteristic(TX);
     await txChar.startNotifications();
-    txChar.addEventListener('characteristicvaluechanged', e => {
-      $('rx').textContent = dec.decode(e.target.value).trim();
-    });
+    txChar.addEventListener('characteristicvaluechanged', e => onNotify(dec.decode(e.target.value).trim()));
     setStatus(true, device.name || '接続済み');
-    timer = setInterval(() => { joyDirty = true; pump(); }, SEND_INTERVAL_MS);
+    timer = setInterval(() => { dirty = true; pump(); }, SEND_INTERVAL_MS);
+    sendEvent('SYNC');   // 現在のルート番号を教えてもらう
+    changed();
   } catch(e) {
     console.warn(e);
     setStatus(false, e.name === 'NotFoundError' ? '未接続' : '接続失敗');
@@ -145,7 +250,8 @@ async function connect(){
 }
 function onDisconnected(){
   clearInterval(timer); timer = null;
-  rxChar = null; queue.length = 0; busy = false;
+  rxChar = null; busy = false; events.length = 0;
+  $('route').textContent = 'ルート —';
   setStatus(false, '切断されました');
 }
 $('connectBtn').addEventListener('click', () => {
@@ -153,48 +259,82 @@ $('connectBtn').addEventListener('click', () => {
   else connect();
 });
 
-// ---- ジョイスティック（-100〜100、上が+Y） ----
-const pad = $('pad'), knob = $('knob');
-let activePointer = null;
-function updateJoy(clientX, clientY){
-  const r = pad.getBoundingClientRect();
-  const R = r.width/2 - 30;
-  let dx = clientX - (r.left + r.width/2), dy = clientY - (r.top + r.height/2);
-  const d = Math.hypot(dx, dy);
-  if (d > R){ dx = dx/d*R; dy = dy/d*R; }
-  knob.style.transform = `translate(${dx}px,${dy}px)`;
-  const x = Math.round(dx/R*100), y = Math.round(-dy/R*100);
-  if (x !== joy.x || y !== joy.y){ joy = {x, y}; joyDirty = true; pump(); }
-  $('joyVal').textContent = `X: ${x}　Y: ${y}`;
-}
-function resetJoy(){
-  activePointer = null;
-  knob.style.transition = 'transform .12s';
-  knob.style.transform = 'translate(0,0)';
-  setTimeout(() => knob.style.transition = '', 130);
-  joy = {x:0, y:0}; joyDirty = true; pump();
-  $('joyVal').textContent = 'X: 0　Y: 0';
-}
-pad.addEventListener('pointerdown', e => {
-  activePointer = e.pointerId; pad.setPointerCapture(e.pointerId);
-  knob.style.transition = ''; updateJoy(e.clientX, e.clientY);
-});
-pad.addEventListener('pointermove', e => { if (e.pointerId === activePointer) updateJoy(e.clientX, e.clientY); });
-pad.addEventListener('pointerup', e => { if (e.pointerId === activePointer) resetJoy(); });
-pad.addEventListener('pointercancel', e => { if (e.pointerId === activePointer) resetJoy(); });
+// ---- 移動スティック（-100〜100、右・上が＋。斜めいっぱいで両軸±100。離すと中央に戻る） ----
+(() => {
+  const section = $('stick');
+  const pad = section.querySelector('.pad'), knob = section.querySelector('.knob'), out = section.querySelector('.val');
+  let pid = null;
+  const set = (x, y) => {
+    if (x !== state.x || y !== state.y){ state.x = x; state.y = y; changed(); }
+    out.textContent = `X ${x}　Y ${y}`;
+  };
+  const move = e => {
+    const r = pad.getBoundingClientRect();
+    const R = r.width/2 - knob.offsetWidth/2 - 4;
+    let dx = e.clientX - (r.left + r.width/2), dy = e.clientY - (r.top + r.height/2);
+    dx = Math.max(-R, Math.min(R, dx)); dy = Math.max(-R, Math.min(R, dy));
+    knob.style.transform = `translate(${dx}px,${dy}px)`;
+    set(Math.round(dx/R*100) || 0, Math.round(-dy/R*100) || 0);
+  };
+  const end = e => {
+    if (e.pointerId !== pid) return;
+    pid = null;
+    knob.style.transition = 'transform .12s';
+    knob.style.transform = 'translate(0px,0px)';
+    set(0, 0);
+  };
+  pad.addEventListener('pointerdown', e => { pid = e.pointerId; pad.setPointerCapture(pid); knob.style.transition = ''; move(e); });
+  pad.addEventListener('pointermove', e => { if (e.pointerId === pid) move(e); });
+  pad.addEventListener('pointerup', end);
+  pad.addEventListener('pointercancel', end);
+})();
 
-// ---- ボタン（押した瞬間 B,A,1 / 離した瞬間 B,A,0） ----
-document.querySelectorAll('.b').forEach(btn => {
-  const id = btn.dataset.id;
-  let down = false;
-  const press = e => { e.preventDefault(); if (down) return; down = true; btn.classList.add('pressed'); send(`B,${id},1`); };
-  const release = e => { e.preventDefault(); if (!down) return; down = false; btn.classList.remove('pressed'); send(`B,${id},0`); };
-  btn.addEventListener('pointerdown', e => { btn.setPointerCapture(e.pointerId); press(e); });
-  btn.addEventListener('pointerup', release);
-  btn.addEventListener('pointercancel', release);
+// ---- スイッチ ----
+document.querySelectorAll('.sw').forEach(sw => {
+  const key = sw.dataset.key, btns = sw.querySelectorAll('button');
+  btns.forEach(b => b.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    btns.forEach(x => x.classList.toggle('on', x === b));
+    const v = Number(b.dataset.v);
+    if (state[key] !== v){ state[key] = v; changed(); }
+  }));
 });
 
-// iOSのダブルタップズーム・スクロールを抑止
+// ---- ボタン（ルート+1 / ルート-1 / 決定） ----
+document.querySelectorAll('.pb').forEach(b => {
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    b.classList.add('pressed');
+    sendEvent(b.dataset.ev);
+  });
+  const up = () => b.classList.remove('pressed');
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointercancel', up);
+  b.addEventListener('pointerleave', up);
+});
+
+// ---- スライダー（0=収納 〜 100=展開、指を離しても値は保持） ----
+(() => {
+  const track = $('track'), rail = $('rail'), fill = $('fill'), thumb = $('thumb');
+  let pid = null;
+  const show = v => { fill.style.width = v + '%'; thumb.style.left = v + '%'; $('slVal').textContent = v; };
+  const move = e => {
+    const r = rail.getBoundingClientRect();
+    const v = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 100);
+    show(v);
+    if (v !== state.arm){ state.arm = v; changed(); }
+  };
+  track.addEventListener('pointerdown', e => { pid = e.pointerId; track.setPointerCapture(pid); move(e); });
+  track.addEventListener('pointermove', e => { if (e.pointerId === pid) move(e); });
+  const end = e => { if (e.pointerId === pid) pid = null; };
+  track.addEventListener('pointerup', end);
+  track.addEventListener('pointercancel', end);
+  show(state.arm);
+})();
+
+$('tx').textContent = frame();
+
+// iOSのスクロール・ダブルタップズームを抑止
 document.addEventListener('touchmove', e => e.preventDefault(), {passive:false});
 document.addEventListener('dblclick', e => e.preventDefault());
 </script>
