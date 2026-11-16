@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>ESP32-S3 コントローラー</title>
+<style>
+  :root{
+    --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --muted:#8a94a3;
+    --accent:#3fa7ff; --ok:#3ccf7a; --ng:#ff5d5d;
+  }
+  *{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;overscroll-behavior:none}
+  body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+  header h1{font-size:15px;font-weight:600;margin:0;flex:1}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--ng)}
+  .dot.on{background:var(--ok)}
+  #status{font-size:13px;color:var(--muted)}
+  #connectBtn{border:0;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:600;background:var(--accent);color:#fff}
+  #connectBtn.disconnect{background:#3a424e}
+  #warn{display:none;margin:10px 14px 0;padding:10px 12px;border-radius:8px;background:#3a2a12;color:#ffcf85;font-size:13px;line-height:1.5}
+  main{flex:1;display:flex;align-items:center;justify-content:space-around;gap:20px;padding:16px;touch-action:none}
+  @media (orientation:portrait){ main{flex-direction:column;justify-content:space-evenly} }
+
+  /* ジョイスティック */
+  #pad{position:relative;width:210px;height:210px;border-radius:50%;background:var(--panel);
+    border:2px solid var(--line);touch-action:none}
+  #pad::before,#pad::after{content:"";position:absolute;background:var(--line)}
+  #pad::before{left:50%;top:12%;bottom:12%;width:1px}
+  #pad::after{top:50%;left:12%;right:12%;height:1px}
+  #knob{position:absolute;width:84px;height:84px;left:50%;top:50%;margin:-42px 0 0 -42px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#5bb6ff,#1f6fc0);box-shadow:0 4px 14px rgba(0,0,0,.5);z-index:1;pointer-events:none}
+  #joyVal{text-align:center;font-size:12px;color:var(--muted);margin-top:8px;font-variant-numeric:tabular-nums}
+
+  /* ボタン（ひし形配置） */
+  #btns{display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(3,72px);gap:6px}
+  .b{border:0;border-radius:50%;font-size:22px;font-weight:700;color:#fff;touch-action:none}
+  .b:active,.b.pressed{filter:brightness(1.35);transform:scale(.94)}
+  .b[data-id="Y"]{grid-area:1/2;background:#c9a227}
+  .b[data-id="X"]{grid-area:2/1;background:#2f7fd6}
+  .b[data-id="B"]{grid-area:2/3;background:#d64545}
+  .b[data-id="A"]{grid-area:3/2;background:#2fa65a}
+
+  footer{padding:8px 14px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);
+    display:flex;gap:10px;align-items:center}
+  footer span{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--text);font-family:ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="dot"></div>
+  <h1>ESP32-S3 コントローラー</h1>
+  <div id="status">未接続</div>
+  <button id="connectBtn">接続</button>
+</header>
+<div id="warn">このブラウザはWeb Bluetoothに対応していません。iPhoneでは <b>Bluefy</b> アプリでこのページを開いてください。</div>
+
+<main>
+  <div>
+    <div id="pad"><div id="knob"></div></div>
+    <div id="joyVal">X: 0　Y: 0</div>
+  </div>
+  <div id="btns">
+    <button class="b" data-id="Y">Y</button>
+    <button class="b" data-id="X">X</button>
+    <button class="b" data-id="B">B</button>
+    <button class="b" data-id="A">A</button>
+  </div>
+</main>
+
+<footer>ESP32から: <span id="rx">—</span></footer>
+
+<script>
+// Nordic UART Service（ESP32側スケッチと同じUUID）
+const SVC = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const RX  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // iPhone → ESP32（書き込み）
+const TX  = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // ESP32 → iPhone（通知）
+const SEND_INTERVAL_MS = 100; // ジョイスティック値の送信間隔（ESP32側の安全停止の生存信号も兼ねる）
+
+const $ = id => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+let device = null, rxChar = null, busy = false;
+const queue = [];          // ボタンイベント（取りこぼさないよう順番に送る）
+let joy = {x:0, y:0}, joyDirty = false, timer = null;
+
+if (!navigator.bluetooth) $('warn').style.display = 'block';
+
+function setStatus(connected, text){
+  $('dot').classList.toggle('on', connected);
+  $('status').textContent = text;
+  const btn = $('connectBtn');
+  btn.textContent = connected ? '切断' : '接続';
+  btn.classList.toggle('disconnect', connected);
+}
+
+// ---- 送信処理：BLEは同時に1件しか書き込めないので、1件ずつ順番に流す ----
+async function pump(){
+  if (busy || !rxChar) return;
+  let msg = queue.shift();
+  if (msg === undefined && joyDirty){ msg = `J,${joy.x},${joy.y}`; joyDirty = false; }
+  if (msg === undefined) return;
+  busy = true;
+  try {
+    const data = enc.encode(msg + '\n');
+    if (rxChar.writeValueWithoutResponse) await rxChar.writeValueWithoutResponse(data);
+    else await rxChar.writeValue(data);
+  } catch(e) {
+    console.warn('送信失敗', e);
+  } finally {
+    busy = false;
+    if (queue.length || joyDirty) pump();
+  }
+}
+function send(msg){ queue.push(msg); pump(); }
+
+// ---- 接続 / 切断 ----
+async function connect(){
+  try {
+    setStatus(false, '検索中…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{services:[SVC]}, {namePrefix:'S3-Ctrl'}],
+      optionalServices: [SVC]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    setStatus(false, '接続中…');
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SVC);
+    rxChar = await service.getCharacteristic(RX);
+    const txChar = await service.getCharacteristic(TX);
+    await txChar.startNotifications();
+    txChar.addEventListener('characteristicvaluechanged', e => {
+      $('rx').textContent = dec.decode(e.target.value).trim();
+    });
+    setStatus(true, device.name || '接続済み');
+    timer = setInterval(() => { joyDirty = true; pump(); }, SEND_INTERVAL_MS);
+  } catch(e) {
+    console.warn(e);
+    setStatus(false, e.name === 'NotFoundError' ? '未接続' : '接続失敗');
+    rxChar = null;
+  }
+}
+function onDisconnected(){
+  clearInterval(timer); timer = null;
+  rxChar = null; queue.length = 0; busy = false;
+  setStatus(false, '切断されました');
+}
+$('connectBtn').addEventListener('click', () => {
+  if (device && device.gatt.connected) device.gatt.disconnect();
+  else connect();
+});
+
+// ---- ジョイスティック（-100〜100、上が+Y） ----
+const pad = $('pad'), knob = $('knob');
+let activePointer = null;
+function updateJoy(clientX, clientY){
+  const r = pad.getBoundingClientRect();
+  const R = r.width/2 - 30;
+  let dx = clientX - (r.left + r.width/2), dy = clientY - (r.top + r.height/2);
+  const d = Math.hypot(dx, dy);
+  if (d > R){ dx = dx/d*R; dy = dy/d*R; }
+  knob.style.transform = `translate(${dx}px,${dy}px)`;
+  const x = Math.round(dx/R*100), y = Math.round(-dy/R*100);
+  if (x !== joy.x || y !== joy.y){ joy = {x, y}; joyDirty = true; pump(); }
+  $('joyVal').textContent = `X: ${x}　Y: ${y}`;
+}
+function resetJoy(){
+  activePointer = null;
+  knob.style.transition = 'transform .12s';
+  knob.style.transform = 'translate(0,0)';
+  setTimeout(() => knob.style.transition = '', 130);
+  joy = {x:0, y:0}; joyDirty = true; pump();
+  $('joyVal').textContent = 'X: 0　Y: 0';
+}
+pad.addEventListener('pointerdown', e => {
+  activePointer = e.pointerId; pad.setPointerCapture(e.pointerId);
+  knob.style.transition = ''; updateJoy(e.clientX, e.clientY);
+});
+pad.addEventListener('pointermove', e => { if (e.pointerId === activePointer) updateJoy(e.clientX, e.clientY); });
+pad.addEventListener('pointerup', e => { if (e.pointerId === activePointer) resetJoy(); });
+pad.addEventListener('pointercancel', e => { if (e.pointerId === activePointer) resetJoy(); });
+
+// ---- ボタン（押した瞬間 B,A,1 / 離した瞬間 B,A,0） ----
+document.querySelectorAll('.b').forEach(btn => {
+  const id = btn.dataset.id;
+  let down = false;
+  const press = e => { e.preventDefault(); if (down) return; down = true; btn.classList.add('pressed'); send(`B,${id},1`); };
+  const release = e => { e.preventDefault(); if (!down) return; down = false; btn.classList.remove('pressed'); send(`B,${id},0`); };
+  btn.addEventListener('pointerdown', e => { btn.setPointerCapture(e.pointerId); press(e); });
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+});
+
+// iOSのダブルタップズーム・スクロールを抑止
+document.addEventListener('touchmove', e => e.preventDefault(), {passive:false});
+document.addEventListener('dblclick', e => e.preventDefault());
+</script>
+</body>
+</html>
