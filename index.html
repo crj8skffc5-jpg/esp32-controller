@@ -10,9 +10,9 @@
   :root{
     --bg:#111418; --panel:#1b2027; --line:#2c333d; --text:#e8ecf1; --muted:#8a94a3;
     --accent:#3fa7ff; --ok:#3ccf7a; --ng:#ff5d5d; --on:#f5a524; --warn:#f5c524;
-    --stick:min(190px,52vw,55vh);
+    --pad:min(200px,52vw,56vh);
   }
-  *{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  *{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
   html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
   html,body{margin:0;background:var(--bg);color:var(--text);overflow:hidden;overscroll-behavior:none;touch-action:none;
     font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif}
@@ -66,6 +66,12 @@
   .pb.recover{height:72px;min-width:200px;font-size:22px;background:var(--accent);color:#fff}
   .pb.pressed{filter:brightness(1.4)}
   .pb.dis{opacity:.25}
+  .pb small{display:block;font-size:10px;font-weight:600;opacity:.85}
+
+  /* 長押しボタン：押している間、下のバーが1秒で伸び、伸びきったら確定 */
+  .hold{position:relative;overflow:hidden;line-height:1.15}
+  .hold .bar{position:absolute;left:0;bottom:0;height:5px;width:0;background:rgba(255,255,255,.9)}
+  .hold.holding .bar{width:100%;transition:width 1s linear}
 
   /* オルタネイトボタン（押すたびにON/OFF） */
   .tgs{display:grid;grid-template-columns:repeat(2,100px);gap:10px}
@@ -74,11 +80,16 @@
   .tg::after{content:"OFF";position:absolute;right:7px;top:4px;font-size:9px;font-weight:600;opacity:.7}
   .tg.on{background:var(--on);border-color:var(--on);color:#1a1200}
   .tg.on::after{content:"ON"}
-  .tg.rec.on{background:var(--ng);border-color:var(--ng);color:#fff}
   .tg.pause.on{background:var(--warn);border-color:var(--warn);color:#1a1600}
   .tg.dis{opacity:.25}
   .tg.hidden{visibility:hidden}
   .tg.big{height:64px;min-width:120px;font-size:18px}
+
+  /* 記録開始 ⇔ 記録終了 */
+  .recbtn{height:52px;border:2px solid var(--ng);border-radius:12px;background:var(--panel);color:var(--ng);
+    font-size:15px;font-weight:700;touch-action:none}
+  .recbtn.recording{background:var(--ng);color:#fff}
+  .recbtn small{display:block;font-size:10px;font-weight:600;opacity:.85}
 
   /* 状態表示 */
   .badge{min-width:170px;padding:7px 14px;border-radius:999px;text-align:center;font-size:14px;font-weight:700;
@@ -113,14 +124,14 @@
     background:#e8ecf1;box-shadow:0 2px 8px rgba(0,0,0,.5);transform:translateX(-50%);pointer-events:none}
   .ends{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:0 4px}
 
-  /* スティック（四角い可動域：斜めいっぱいで両軸±100） */
-  .pad{position:relative;width:var(--stick);height:var(--stick);border-radius:22px;background:var(--panel);
-    border:2px solid var(--line);touch-action:none;margin-top:4px}
-  .pad::before,.pad::after{content:"";position:absolute;background:var(--line)}
-  .pad::before{left:50%;top:10%;bottom:10%;width:1px}
-  .pad::after{top:50%;left:10%;right:10%;height:1px}
-  .knob{position:absolute;width:36%;height:36%;left:32%;top:32%;border-radius:50%;
-    background:radial-gradient(circle at 35% 30%,#5bb6ff,#1f6fc0);box-shadow:0 4px 14px rgba(0,0,0,.5);z-index:1;pointer-events:none}
+  /* 移動：8方向ボタン（押している間だけ動く。指を滑らせると向きが変わる） */
+  .dpad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:6px;
+    width:var(--pad);height:var(--pad);touch-action:none;margin-top:4px}
+  .cell{display:flex;align-items:center;justify-content:center;border-radius:12px;background:var(--panel);
+    border:2px solid var(--line);font-size:28px;font-weight:700;color:var(--text);pointer-events:none}
+  .cell.diag{color:#b9c3cf}
+  .cell.center{background:transparent;border-color:transparent;color:var(--muted);font-size:11px;font-weight:600}
+  .cell.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
   footer{padding:5px 12px 8px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);
     display:flex;gap:14px;align-items:center;white-space:nowrap;overflow:hidden}
@@ -162,7 +173,7 @@
   <!-- スタンバイ：ルート選択・決定 -->
   <section id="pStandby" class="panel">
     <div class="col">
-      <div class="lbl">ルート選択</div>
+      <div class="lbl">ルート選択（1〜30）</div>
       <div id="routeNum"><small>ルート</small><span id="routeVal">1</span></div>
       <div class="btnrow">
         <button class="pb" data-ev="down">ルート −1</button>
@@ -179,7 +190,7 @@
       <div class="tgs">
         <button class="tg" data-key="top">上面</button>
         <button class="tg" data-key="slope">法面</button>
-        <button class="tg rec" data-key="rec">記録</button>
+        <button class="recbtn hold" id="recBtn"><span id="recLabel">● 記録開始</span><small id="recSub"></small><span class="bar"></span></button>
         <button class="tg pause" data-key="pause" id="pauseManual">一時停止</button>
       </div>
       <div id="recBadge" class="badge">記録していません</div>
@@ -189,10 +200,20 @@
         <div class="ends"><span>0 収納</span><span>展開 100</span></div>
       </div>
     </div>
-    <div id="stick">
+    <div id="move">
       <div class="lbl">移動</div>
-      <div class="pad"><div class="knob"></div></div>
-      <div class="val">前後 0　左右 0</div>
+      <div class="dpad" id="dpad">
+        <div class="cell diag" data-f="1" data-t="-1">↖</div>
+        <div class="cell" data-f="1" data-t="0">↑</div>
+        <div class="cell diag" data-f="1" data-t="1">↗</div>
+        <div class="cell" data-f="0" data-t="-1">←</div>
+        <div class="cell center">停止</div>
+        <div class="cell" data-f="0" data-t="1">→</div>
+        <div class="cell diag" data-f="-1" data-t="-1">↙</div>
+        <div class="cell" data-f="-1" data-t="0">↓</div>
+        <div class="cell diag" data-f="-1" data-t="1">↘</div>
+      </div>
+      <div class="val" id="moveVal">前後 0　左右 0</div>
     </div>
   </section>
 
@@ -203,7 +224,7 @@
       <div class="btnrow">
         <button class="pb start big" data-ev="start" id="btnStart">開始</button>
         <button class="tg pause big" data-key="pause" id="pauseAuto">一時停止</button>
-        <button class="pb end big" data-ev="end" id="btnEnd">終了</button>
+        <button class="pb end big hold" id="btnEnd">終了<small>長押し</small><span class="bar"></span></button>
       </div>
     </div>
   </section>
@@ -242,6 +263,8 @@ const CTRL    = '285a8eee-a316-408b-873e-6404cdf3c153'; // 操作データ iPhon
 const STATUS  = '611bdaee-2f87-400b-9775-ea8bdb8802ac'; // 状態データ 本機 → iPhone（13バイト）
 const PROTOCOL_VERSION = 2;
 const SEND_INTERVAL_MS = 50;
+const HOLD_MS = 1000;            // 長押しで確定するまでの時間
+const ROUTE_MIN = 1, ROUTE_MAX = 30;
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
 const FLOW = ['起動時チェック','スタンバイ','手動運転前チェック','操作待機','手動操作','記録中','記録一時停止',
@@ -257,11 +280,11 @@ const $ = id => document.getElementById(id);
 // 画面の状態（ここが唯一の正。render() で画面に反映する）
 const s = {
   mode: null,         // null:―（未選択） 0:スタンバイ 1:手動 2:自動
-  fwd: 0, turn: 0,    // スティック 前後（前進＋）・左右（右＋）
+  fwd: 0, turn: 0,    // 移動 前後（前進＋）・左右（右＋）。8方向ボタンなので −100 / 0 / 100
   top: 0, slope: 0,   // トリマー（それぞれ単独でON/OFF可）
   rec: 0, pause: 0,   // 記録・一時停止
   arm: 0,             // 法面トリマー長さの目標 0〜100
-  route: 1,           // 表示中のルート番号
+  route: 1,           // 表示中のルート番号 1〜30
   decided: false,     // ルート決定済み（ルート±1を押すと取り消し。モード変更・停止・切断では取り消さない）
   autoStarted: false,
   stop: null,         // 本機の停止状態 null / 'abn'（異常停止） / 'estop'（非常停止）
@@ -277,7 +300,12 @@ const cnt = {decide:0, up:0, down:0, start:0, end:0, recover:0};
 
 let device = null, ctrlChar = null, connected = false, busy = false, timer = null, seq = 0, stopReq = false;
 const sentAt = new Float64Array(65536);
-let lastRoutePress = 0;
+
+// 押した操作を本機が受け取るまでは、本機から届く表示で画面を上書きしない（ちらつき防止）。
+// 状態データの「最後に受け取った通し番号」が、押した直後に送るフレームの番号に届いたら受け取り済み。
+const pending = {route: null, auto: null};
+const nextSeq = () => (seq + 1) & 0xFFFF;
+const reached = (got, want) => ((got - want) & 0xFFFF) < 0x8000;   // got ≥ want（65535→0 の折り返し込み）
 
 if (!navigator.bluetooth) $('warn').style.display = 'block';
 
@@ -315,12 +343,15 @@ function render(){
   rn.classList.toggle('decided', s.decided);
   rn.textContent = s.decided ? `ルート ${s.route} に決定済み` : '「決定」を押すと手動・自動を選べます';
 
-  // 手動：オルタネイトボタン（一時停止中は上面・法面・スティック・スライダーを押せない）
+  // 手動（一時停止中は上面・法面・移動・スライダーを押せない。記録終了と一時停止の解除は押せる）
   document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!s[b.dataset.key]));
   document.querySelectorAll('.tg[data-key=top], .tg[data-key=slope]').forEach(b => b.classList.toggle('dis', paused));
   $('pauseManual').classList.toggle('hidden', !s.rec);   // 一時停止は記録中のみ出現
-  $('stick').classList.toggle('locked', paused);
+  $('move').classList.toggle('locked', paused);
   $('slider').classList.toggle('locked', paused);
+  $('recBtn').classList.toggle('recording', !!s.rec);
+  $('recLabel').textContent = s.rec ? '記録終了' : '● 記録開始';
+  $('recSub').textContent = s.rec ? '長押し' : '';
 
   const rb = $('recBadge');
   rb.className = 'badge' + (s.rec ? (s.pause ? ' pause' : ' rec') : '');
@@ -338,12 +369,12 @@ function render(){
   $('abnReason').textContent = s.stopErr ? `原因：${ERR[s.stopErr] ?? 'コード' + s.stopErr}` : '安全を確認して「復帰」を押してください';
 }
 
-// 刃・記録・一時停止・スティック・自動運転を初期状態に戻す
+// 刃・記録・一時停止・移動・自動運転を初期状態に戻す
 function resetControls(){
   s.top = s.slope = s.rec = s.pause = 0;
-  s.fwd = s.turn = 0;
   s.autoStarted = false;
-  resetStick();
+  resetMove();
+  cancelHolds();
 }
 
 function setMode(m){
@@ -371,7 +402,7 @@ function buildFrame(){
   if (!document.hidden && !stopReq) flags |= 0x01;   // bit0 操作有効
   if (stopReq) flags |= 0x02;                        // bit1 停止要求
   buf[3] = flags;
-  const driving = s.mode === 1 && !s.stop && !isPaused();   // 一時停止中はスティックを中立で送る
+  const driving = s.mode === 1 && !s.stop && !isPaused();   // 一時停止中は移動を中立で送る
   dv.setInt8(4, driving ? s.fwd : 0);
   dv.setInt8(5, driving ? s.turn : 0);
   buf[6] = s.mode ?? 0;          // ―はスタンバイとして送る
@@ -432,15 +463,18 @@ function onStatus(dv){
     render();
   }
 
-  // ルート番号は本機の値に合わせる（押した直後は本機の反映待ちなので画面の値を優先）。
-  // 本機側の番号が違っていたら（本機の再起動など）、決定は取り消す
-  if (performance.now() - lastRoutePress > 500 && st.route !== s.route){
+  // ルート番号：押したルート±1を本機が受け取ってから、本機の値に合わせる。
+  // 受け取ったあとも本機の番号が違っていたら（本機の再起動など）、決定は取り消す
+  if (pending.route !== null && reached(st.seq, pending.route)) pending.route = null;
+  if (pending.route === null && st.route !== s.route){
     s.route = st.route;
     s.decided = false;
     render();
   }
-  // 自動運転の表示は本機の状態に合わせる
-  if (s.mode === 2 && !s.stop){
+
+  // 自動運転の開始・終了：押した操作を本機が受け取ってから、本機の状態に合わせる
+  if (pending.auto !== null && reached(st.seq, pending.auto)) pending.auto = null;
+  if (s.mode === 2 && !s.stop && pending.auto === null){
     const started = st.flow === 9 || st.flow === 10;
     if (started !== s.autoStarted){ s.autoStarted = started; if (!started) s.pause = 0; render(); }
   }
@@ -472,6 +506,7 @@ async function connect(){
 function onDisconnected(){
   clearInterval(timer); timer = null;
   ctrlChar = null; busy = false; connected = false;
+  pending.route = pending.auto = null;
   resetControls();
   s.mode = null; s.stop = null; s.stopErr = 0;   // ルートの決定はそのまま
   ['fFlow','fRtk','fBat','fRtt','fErr'].forEach(id => $(id).textContent = '—');
@@ -499,19 +534,18 @@ document.querySelectorAll('#modeSw button').forEach(b => b.addEventListener('poi
   e.preventDefault(); setMode(Number(b.dataset.v));
 }));
 
-// オルタネイトボタン
+// オルタネイトボタン（上面・法面・一時停止）
 document.querySelectorAll('.tg').forEach(b => b.addEventListener('pointerdown', e => {
   e.preventDefault();
   if (s.stop || b.classList.contains('dis') || b.classList.contains('hidden')) return;
   const k = b.dataset.key;
   s[k] = s[k] ? 0 : 1;
-  if (k === 'rec' && !s.rec) s.pause = 0;          // 記録OFFで一時停止も解除
-  if (k === 'pause' && s.pause) resetStick();      // 一時停止したらスティックを中立に
+  if (k === 'pause' && s.pause) resetMove();       // 一時停止したら移動を止める
   render();
 }));
 
-// 押しボタン
-document.querySelectorAll('.pb').forEach(b => {
+// 押しボタン（ルート−1 / 決定 / ルート+1 / 開始 / 復帰）
+document.querySelectorAll('.pb:not(.hold)').forEach(b => {
   b.addEventListener('pointerdown', e => {
     e.preventDefault();
     if (b.classList.contains('dis')) return;
@@ -519,21 +553,20 @@ document.querySelectorAll('.pb').forEach(b => {
     if (s.stop && !(s.stop === 'abn' && ev === 'recover')) return;   // 停止中は復帰以外押せない
     b.classList.add('pressed');
     switch (ev){
-      case 'up':
+      case 'up':     // 30の次は1
         cnt.up = (cnt.up + 1) & 0xFF;
-        s.route = Math.min(255, s.route + 1); s.decided = false; lastRoutePress = performance.now(); break;
-      case 'down':
+        s.route = s.route >= ROUTE_MAX ? ROUTE_MIN : s.route + 1;
+        s.decided = false; pending.route = nextSeq(); break;
+      case 'down':   // 1の前は30
         cnt.down = (cnt.down + 1) & 0xFF;
-        s.route = Math.max(1, s.route - 1); s.decided = false; lastRoutePress = performance.now(); break;
+        s.route = s.route <= ROUTE_MIN ? ROUTE_MAX : s.route - 1;
+        s.decided = false; pending.route = nextSeq(); break;
       case 'decide':
         cnt.decide = (cnt.decide + 1) & 0xFF;
         s.decided = true; break;
       case 'start':
         cnt.start = (cnt.start + 1) & 0xFF;
-        s.pause = 0; s.autoStarted = true; break;
-      case 'end':
-        cnt.end = (cnt.end + 1) & 0xFF;
-        s.pause = 0; s.autoStarted = false; break;
+        s.pause = 0; s.autoStarted = true; pending.auto = nextSeq(); break;
       case 'recover':
         cnt.recover = (cnt.recover + 1) & 0xFF;
         $('recoverNote').textContent = '復帰を送信しました…'; break;
@@ -546,34 +579,74 @@ document.querySelectorAll('.pb').forEach(b => {
   b.addEventListener('pointerleave', up);
 });
 
-// 移動スティック（前後・左右 −100〜100。四角い可動域なので斜めいっぱいで両軸±100。離すと中央に戻る）
-let resetStick = () => {};
+// 長押しボタン：押している間バーが伸び、HOLD_MS 押し続けたら確定。途中で離したら取り消し
+const holdCancels = [];
+function cancelHolds(){ holdCancels.forEach(f => f()); }
+function makeHold(btn, {tap, canHold, done}){
+  let t = null, pid = null;
+  const cancel = () => { clearTimeout(t); t = null; pid = null; btn.classList.remove('holding'); };
+  holdCancels.push(cancel);
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (s.stop || btn.classList.contains('dis') || pid !== null) return;
+    if (tap && tap()) return;                 // 長押し不要な操作（記録開始）はその場で完了
+    if (!canHold()) return;
+    pid = e.pointerId;
+    btn.classList.add('holding');
+    t = setTimeout(() => { cancel(); if (!s.stop && canHold()) done(); }, HOLD_MS);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(type =>
+    btn.addEventListener(type, e => { if (e.pointerId === pid) cancel(); }));
+}
+
+// 記録開始（1回押す）⇔ 記録終了（長押し。一時停止中も可）
+makeHold($('recBtn'), {
+  tap: () => {
+    if (s.mode !== 1 || s.rec) return false;
+    s.rec = 1; render(); return true;
+  },
+  canHold: () => s.mode === 1 && !!s.rec,
+  done: () => { s.rec = 0; s.pause = 0; render(); }
+});
+
+// 自動の終了（長押し。一時停止中も可）
+makeHold($('btnEnd'), {
+  canHold: () => s.mode === 2 && s.autoStarted,
+  done: () => {
+    cnt.end = (cnt.end + 1) & 0xFF;
+    s.pause = 0; s.autoStarted = false; pending.auto = nextSeq();
+    render();
+  }
+});
+
+// 移動：8方向ボタン（押している間だけ動く。指を滑らせると向きが変わる。離すと止まる）
+//   ↑↓ 前後100、←→ その場回転（左右100）、斜め 前後100＋左右100
+let resetMove = () => {};
 (() => {
-  const pad = document.querySelector('#stick .pad'), knob = pad.querySelector('.knob'), out = document.querySelector('#stick .val');
+  const pad = $('dpad'), out = $('moveVal');
+  const cells = [...pad.querySelectorAll('.cell')];
   let pid = null;
-  const set = (turn, fwd) => { s.turn = turn; s.fwd = fwd; out.textContent = `前後 ${fwd}　左右 ${turn}`; };
+  const set = (fwd, turn) => {
+    s.fwd = fwd; s.turn = turn;
+    out.textContent = `前後 ${fwd}　左右 ${turn}`;
+    cells.forEach(c => c.classList.toggle('on', !c.classList.contains('center') &&
+      Number(c.dataset.f) * 100 === fwd && Number(c.dataset.t) * 100 === turn));
+  };
   const move = e => {
-    if (s.stop || isPaused()){ resetStick(); return; }
+    if (s.stop || isPaused()){ resetMove(); return; }
     const r = pad.getBoundingClientRect();
-    const R = r.width/2 - knob.offsetWidth/2 - 4;
-    let dx = e.clientX - (r.left + r.width/2), dy = e.clientY - (r.top + r.height/2);
-    dx = Math.max(-R, Math.min(R, dx)); dy = Math.max(-R, Math.min(R, dy));
-    knob.style.transform = `translate(${dx}px,${dy}px)`;
-    set(Math.round(dx/R*100) || 0, Math.round(-dy/R*100) || 0);
+    const col = Math.max(0, Math.min(2, Math.floor((e.clientX - r.left) / r.width * 3)));
+    const row = Math.max(0, Math.min(2, Math.floor((e.clientY - r.top) / r.height * 3)));
+    set((1 - row) * 100 || 0, (col - 1) * 100 || 0);
   };
-  resetStick = () => {
-    pid = null;
-    knob.style.transition = 'transform .12s';
-    knob.style.transform = 'translate(0px,0px)';
-    set(0, 0);
-  };
+  resetMove = () => { pid = null; set(0, 0); };
   pad.addEventListener('pointerdown', e => {
-    if (s.stop || isPaused()) return;
-    pid = e.pointerId; pad.setPointerCapture(pid); knob.style.transition = ''; move(e);
+    if (pid !== null || s.stop || isPaused()) return;    // 2本目の指は無視
+    pid = e.pointerId; pad.setPointerCapture(pid); move(e);
   });
   pad.addEventListener('pointermove', e => { if (e.pointerId === pid) move(e); });
-  pad.addEventListener('pointerup', e => { if (e.pointerId === pid) resetStick(); });
-  pad.addEventListener('pointercancel', e => { if (e.pointerId === pid) resetStick(); });
+  pad.addEventListener('pointerup', e => { if (e.pointerId === pid) resetMove(); });
+  pad.addEventListener('pointercancel', e => { if (e.pointerId === pid) resetMove(); });
 })();
 
 // スライダー（0=収納 〜 100=展開、指を離しても値は保持。一時停止中は動かせない）
@@ -599,7 +672,6 @@ let resetStick = () => {};
 })();
 
 // タッチ位置の確認（URLの最後に ?debug=1 を付けて開いたときだけ）
-// 指を置いた所に赤い点が出る。点が指の真下に出て、押したいボタン名が表示されれば正常
 if (DEBUG){
   const dot = document.createElement('div'); dot.id = 'tapDot'; document.body.appendChild(dot);
   const info = document.createElement('div'); info.id = 'tapInfo'; document.body.appendChild(info);
@@ -614,9 +686,10 @@ if (DEBUG){
 
 render();
 
-// iOSのスクロール・ダブルタップズームを抑止
+// iOSのスクロール・ダブルタップズーム・長押しメニューを抑止
 document.addEventListener('touchmove', e => e.preventDefault(), {passive:false});
 document.addEventListener('dblclick', e => e.preventDefault());
+document.addEventListener('contextmenu', e => e.preventDefault());
 </script>
 </body>
 </html>
