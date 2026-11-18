@@ -26,8 +26,11 @@
 
   main{flex:1;min-height:0;display:grid;grid-template-columns:auto 1fr;grid-template-areas:"m p";
     align-items:center;gap:16px;padding:10px 16px;touch-action:none}
+  main.stopped{grid-template-columns:1fr;grid-template-areas:"p"}
+  main.stopped #modeSw{display:none}
   @media (orientation:portrait){
     main{grid-template-columns:1fr;grid-template-areas:"m" "p";grid-template-rows:auto 1fr;justify-items:center}
+    main.stopped{grid-template-areas:"p";grid-template-rows:1fr}
   }
   #modeSw{grid-area:m}
   .panel{grid-area:p;display:none;width:100%;height:100%;align-items:center;justify-content:space-evenly;gap:16px}
@@ -36,21 +39,29 @@
   .col{display:flex;flex-direction:column;align-items:center;gap:12px}
   .lbl{font-size:11px;color:var(--muted);text-align:center;letter-spacing:.05em}
   .val{font-size:12px;color:var(--muted);text-align:center;margin-top:4px;font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,monospace}
+  .msg{font-size:16px;color:var(--muted);text-align:center;line-height:1.7}
 
-  /* モード切替（三段スイッチ2：常に表示） */
+  /* モード切替（三段スイッチ2） */
   .sw{display:flex;flex-direction:column;align-items:center;gap:4px}
+  #modeLbl{font-size:12px;color:var(--muted)}
+  #modeLbl b{color:var(--text)}
   .seg{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
   .seg button{width:104px;height:48px;border:0;background:transparent;color:var(--muted);font-size:15px;font-weight:700;touch-action:none}
   .seg button+button{border-top:1px solid var(--line)}
   .seg button.on{background:var(--on);color:#1a1200}
+  .seg button.dis{opacity:.25}
 
   /* 押しボタン（モーメンタリ） */
-  .btnrow{display:flex;gap:10px;justify-content:center}
+  .btnrow{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
   .pb{height:56px;min-width:96px;padding:0 14px;border:0;border-radius:12px;background:#2a313b;color:var(--text);
     font-size:16px;font-weight:700;touch-action:none}
   .pb.ok{background:var(--accent);color:#fff}
-  .pb.start{background:var(--ok);color:#06210f;min-width:130px;height:64px;font-size:18px}
+  .pb.start{background:var(--ok);color:#06210f}
+  .pb.end{background:#5a2e33;color:#ffd0d0}
+  .pb.big{height:64px;min-width:120px;font-size:18px}
+  .pb.recover{height:72px;min-width:200px;font-size:22px;background:var(--accent);color:#fff}
   .pb.pressed{filter:brightness(1.4);transform:scale(.95)}
+  .pb.dis{opacity:.25}
 
   /* オルタネイトボタン（押すたびにON/OFF） */
   .tgs{display:grid;grid-template-columns:repeat(2,100px);gap:10px}
@@ -61,9 +72,9 @@
   .tg.on::after{content:"ON"}
   .tg.rec.on{background:var(--ng);border-color:var(--ng);color:#fff}
   .tg.pause.on{background:var(--warn);border-color:var(--warn);color:#1a1600}
-  .tg.dis{opacity:.3}
+  .tg.dis{opacity:.25}
   .tg.hidden{visibility:hidden}
-  .tg.big{height:64px;min-width:130px;font-size:18px}
+  .tg.big{height:64px;min-width:120px;font-size:18px}
 
   /* 状態表示 */
   .badge{min-width:170px;padding:7px 14px;border-radius:999px;text-align:center;font-size:14px;font-weight:700;
@@ -75,6 +86,13 @@
   .badge.run{background:rgba(60,207,122,.15);color:var(--ok);border-color:var(--ok)}
   .badge.run::before{content:"▶";margin-right:6px}
   @keyframes blink{50%{opacity:0}}
+
+  /* 停止画面 */
+  .stopTitle{font-size:34px;font-weight:800;letter-spacing:.08em}
+  #pAbn .stopTitle{color:var(--warn)}
+  #pEstop .stopTitle{color:var(--ng);animation:blink 1.2s steps(2) infinite}
+  #pEstop{background:repeating-linear-gradient(45deg,rgba(255,93,93,.07) 0 18px,transparent 18px 36px);border-radius:16px}
+  .reason{font-size:15px;color:var(--text);text-align:center}
 
   /* ルート表示 */
   #routeNum{font-size:56px;font-weight:800;line-height:1;text-align:center;font-variant-numeric:tabular-nums}
@@ -114,19 +132,24 @@
 </header>
 <div id="warn">このブラウザはWeb Bluetoothに対応していません。iPhoneでは <b>Bluefy</b> アプリでこのページを開いてください。</div>
 
-<main>
-  <!-- 三段スイッチ2（モード）：常に表示 -->
+<main id="main">
+  <!-- 三段スイッチ2（モード）：停止画面以外では常に表示 -->
   <section id="modeSw" class="sw">
-    <div class="lbl">モード</div>
+    <div id="modeLbl">モード <b id="modeName">―</b></div>
     <div class="seg">
       <button data-v="2">自動</button>
-      <button data-v="0" class="on">スタンバイ</button>
+      <button data-v="0">スタンバイ</button>
       <button data-v="1">手動</button>
     </div>
   </section>
 
+  <!-- モード未選択（―） -->
+  <section id="pNone" class="panel show">
+    <div class="msg" id="noneMsg">「接続」を押して本機とつないでください</div>
+  </section>
+
   <!-- スタンバイ：ルート選択・決定 -->
-  <section id="pStandby" class="panel show">
+  <section id="pStandby" class="panel">
     <div class="col">
       <div class="lbl">ルート選択</div>
       <div id="routeNum"><small>ルート</small><span id="routeVal">1</span></div>
@@ -139,7 +162,7 @@
     </div>
   </section>
 
-  <!-- 手動：移動スティック・スライダー・トリマー・記録・一時停止 -->
+  <!-- 手動 -->
   <section id="pManual" class="panel">
     <div class="col">
       <div class="tgs">
@@ -162,14 +185,33 @@
     </div>
   </section>
 
-  <!-- 自動：開始・一時停止 -->
+  <!-- 自動 -->
   <section id="pAuto" class="panel">
     <div class="col">
       <div id="autoBadge" class="badge">開始待ち</div>
       <div class="btnrow">
-        <button class="pb start" data-ev="start">開始</button>
-        <button class="tg pause big" data-key="pause">一時停止</button>
+        <button class="pb start big" data-ev="start" id="btnStart">開始</button>
+        <button class="tg pause big" data-key="pause" id="pauseAuto">一時停止</button>
+        <button class="pb end big" data-ev="end" id="btnEnd">終了</button>
       </div>
+    </div>
+  </section>
+
+  <!-- 異常停止：復帰ボタンのみ -->
+  <section id="pAbn" class="panel">
+    <div class="col">
+      <div class="stopTitle">異常停止</div>
+      <div class="reason" id="abnReason">—</div>
+      <button class="pb recover" data-ev="recover">復帰</button>
+      <div class="lbl" id="recoverNote"></div>
+    </div>
+  </section>
+
+  <!-- 非常停止：操作不可 -->
+  <section id="pEstop" class="panel">
+    <div class="col">
+      <div class="stopTitle">非常停止</div>
+      <div class="msg">本機の非常停止ボタンが押されています。<br>安全を確認してから、本機のボタンを解除してください。</div>
     </div>
   </section>
 </main>
@@ -183,37 +225,42 @@
 </footer>
 
 <script>
-// ===== スサノオ操作アプリ BLE 通信仕様 v1 に準拠 =====
+// ===== スサノオ操作アプリ BLE 通信仕様 v2（v1 からの変更点はスケッチ冒頭のコメント参照） =====
 const SVC     = '84dbef29-b58a-4048-a30e-e70379b4d89a';
-const CTRL    = '285a8eee-a316-408b-873e-6404cdf3c153'; // 操作データ iPhone → 本機（14バイト）
+const CTRL    = '285a8eee-a316-408b-873e-6404cdf3c153'; // 操作データ iPhone → 本機（17バイト）
 const STATUS  = '611bdaee-2f87-400b-9775-ea8bdb8802ac'; // 状態データ 本機 → iPhone（13バイト）
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const SEND_INTERVAL_MS = 50;
 
 const FLOW = ['起動時チェック','スタンバイ','手動運転前チェック','操作待機','手動操作','記録中','記録一時停止',
-              '運転待機','運転前チェック','自動運転中','自動運転一時停止','非常停止','システム異常停止','保護停止','作業完了'];
+              '運転待機','運転前チェック','自動運転中','自動運転一時停止','非常停止','異常停止','異常停止（保護）','作業完了'];
 const ERR  = ['なし','非常停止ボタン','GPSロスト','通信途絶','転倒・持ち上げ','衝突検知','人検知','電源電圧の異常',
               '走行異常','記録の書き込み失敗','記録を読めない','開始地点から離れている','初期位置にない'];
 const RTK  = ['なし','単独','Float','Fix'];
+const MODE_NAME = ['スタンバイ','手動','自動'];
+const FLOW_ESTOP = 11, FLOW_ABN = 12, FLOW_PROTECT = 13;
 
 const $ = id => document.getElementById(id);
 
 // 画面の状態（ここが唯一の正。render() で画面に反映する）
 const s = {
-  mode: 0,            // 0:スタンバイ 1:手動 2:自動
+  mode: null,         // null:―（未選択） 0:スタンバイ 1:手動 2:自動
   fwd: 0, turn: 0,    // スティック 前後（前進＋）・左右（右＋）
-  top: 0, slope: 0,   // トリマー（法面は上面ON時のみ）
+  top: 0, slope: 0,   // トリマー（それぞれ単独でON/OFF可）
   rec: 0, pause: 0,   // 記録・一時停止
   arm: 0,             // 法面トリマー長さの目標 0〜100
   route: 1,           // 表示中のルート番号
-  autoStarted: false
+  autoStarted: false,
+  stop: null,         // 本機の停止状態 null / 'abn'（異常停止） / 'estop'（非常停止）
+  stopErr: 0
 };
-const trimmerCode = () => s.top ? (s.slope ? 2 : 1) : 0;  // 0:全OFF 1:上面のみ 2:上面＋法面
+// 0:全OFF 1:上面のみ 2:上面＋法面 3:法面のみ
+const trimmerCode = () => s.top ? (s.slope ? 2 : 1) : (s.slope ? 3 : 0);
 
 // 押した回数（UInt8、255の次は0）
-const cnt = {decide:0, up:0, down:0};
+const cnt = {decide:0, up:0, down:0, start:0, end:0, recover:0};
 
-let device = null, ctrlChar = null, busy = false, timer = null, seq = 0, stopReq = false;
+let device = null, ctrlChar = null, connected = false, busy = false, timer = null, seq = 0, stopReq = false;
 const sentAt = new Float64Array(65536);
 let lastRoutePress = 0;
 
@@ -221,15 +268,26 @@ if (!navigator.bluetooth) $('warn').style.display = 'block';
 
 // ---------------- 画面の反映 ----------------
 function render(){
-  // モード
-  document.querySelectorAll('#modeSw button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === s.mode));
-  $('pStandby').classList.toggle('show', s.mode === 0);
-  $('pManual').classList.toggle('show', s.mode === 1);
-  $('pAuto').classList.toggle('show', s.mode === 2);
+  const view = s.stop ?? (s.mode === null ? 'none' : ['standby','manual','auto'][s.mode]);
+  $('main').classList.toggle('stopped', !!s.stop);
+  $('pNone').classList.toggle('show', view === 'none');
+  $('pStandby').classList.toggle('show', view === 'standby');
+  $('pManual').classList.toggle('show', view === 'manual');
+  $('pAuto').classList.toggle('show', view === 'auto');
+  $('pAbn').classList.toggle('show', view === 'abn');
+  $('pEstop').classList.toggle('show', view === 'estop');
+
+  // モード切替：未接続なら全部押せない。―のときはスタンバイだけ押せる
+  $('modeName').textContent = s.mode === null ? '―' : MODE_NAME[s.mode];
+  document.querySelectorAll('#modeSw button').forEach(b => {
+    const v = Number(b.dataset.v);
+    b.classList.toggle('on', v === s.mode);
+    b.classList.toggle('dis', !connected || (s.mode === null && v !== 0));
+  });
+  $('noneMsg').textContent = connected ? '「スタンバイ」を選んでください' : '「接続」を押して本機とつないでください';
 
   // オルタネイトボタン
   document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!s[b.dataset.key]));
-  document.querySelector('.tg[data-key=slope]').classList.toggle('dis', !s.top);
   $('pauseManual').classList.toggle('hidden', !s.rec);   // 一時停止は記録中のみ出現
 
   // 記録の状態
@@ -237,37 +295,48 @@ function render(){
   rb.className = 'badge' + (s.rec ? (s.pause ? ' pause' : ' rec') : '');
   rb.textContent = s.rec ? (s.pause ? '記録一時停止中' : '記録中') : '記録していません';
 
-  // 自動運転の状態
+  // 自動運転の状態とボタン
   const ab = $('autoBadge');
-  ab.className = 'badge' + (s.pause ? ' pause' : (s.autoStarted ? ' run' : ''));
-  ab.textContent = s.pause ? '一時停止中' : (s.autoStarted ? '自動運転中' : '開始待ち');
+  ab.className = 'badge' + (s.autoStarted ? (s.pause ? ' pause' : ' run') : '');
+  ab.textContent = s.autoStarted ? (s.pause ? '一時停止中' : '自動運転中') : '開始待ち';
+  $('btnStart').classList.toggle('dis', s.autoStarted);
+  $('pauseAuto').classList.toggle('dis', !s.autoStarted);
+  $('btnEnd').classList.toggle('dis', !s.autoStarted);
 
-  // ルート
+  // 異常停止の理由
+  $('abnReason').textContent = s.stopErr ? `原因：${ERR[s.stopErr] ?? 'コード' + s.stopErr}` : '安全を確認して「復帰」を押してください';
+
   $('routeVal').textContent = s.route;
 }
 
-function setMode(m){
-  if (m === s.mode) return;
-  s.mode = m;
-  // モードを変えたら、刃・記録・一時停止・スティックは初期状態に戻す
+// 刃・記録・一時停止・スティック・自動運転を初期状態に戻す
+function resetControls(){
   s.top = s.slope = s.rec = s.pause = 0;
   s.fwd = s.turn = 0;
   s.autoStarted = false;
   resetStick();
+}
+
+function setMode(m){
+  if (!connected || s.stop) return;
+  if (s.mode === null && m !== 0) return;   // ―からは手動・自動に入れない
+  if (m === s.mode) return;
+  s.mode = m;
+  resetControls();
   render();
 }
 
 // ---------------- BLE ----------------
-function setStatus(connected, text){
-  $('dot').classList.toggle('on', connected);
+function setStatus(on, text){
+  $('dot').classList.toggle('on', on);
   $('status').textContent = text;
   const btn = $('connectBtn');
-  btn.textContent = connected ? '切断' : '接続';
-  btn.classList.toggle('disconnect', connected);
+  btn.textContent = on ? '切断' : '接続';
+  btn.classList.toggle('disconnect', on);
 }
 
 function buildFrame(){
-  const buf = new Uint8Array(14), dv = new DataView(buf.buffer);
+  const buf = new Uint8Array(17), dv = new DataView(buf.buffer);
   seq = (seq + 1) & 0xFFFF;
   dv.setUint16(0, seq, true);
   buf[2] = PROTOCOL_VERSION;
@@ -275,10 +344,10 @@ function buildFrame(){
   if (!document.hidden && !stopReq) flags |= 0x01;   // bit0 操作有効
   if (stopReq) flags |= 0x02;                        // bit1 停止要求
   buf[3] = flags;
-  const manual = s.mode === 1;
+  const manual = s.mode === 1 && !s.stop;
   dv.setInt8(4, manual ? s.fwd : 0);
   dv.setInt8(5, manual ? s.turn : 0);
-  buf[6] = s.mode;
+  buf[6] = s.mode ?? 0;          // ―はスタンバイとして送る
   buf[7] = trimmerCode();
   buf[8] = s.rec;
   buf[9] = s.pause;
@@ -286,6 +355,9 @@ function buildFrame(){
   buf[11] = cnt.decide;
   buf[12] = cnt.up;
   buf[13] = cnt.down;
+  buf[14] = cnt.start;
+  buf[15] = cnt.end;
+  buf[16] = cnt.recover;
   sentAt[seq] = performance.now();
   return buf;
 }
@@ -319,12 +391,26 @@ function onStatus(dv){
   const t0 = sentAt[st.seq];
   if (t0) $('fRtt').textContent = Math.max(0, Math.round(performance.now() - t0 - st.age)) + 'ms';
 
+  // 停止状態（本機の判断に従う）
+  const stop = st.flow === FLOW_ESTOP ? 'estop' : (st.flow === FLOW_ABN || st.flow === FLOW_PROTECT ? 'abn' : null);
+  if (stop !== s.stop || (stop && st.err !== s.stopErr)){
+    if (stop && !s.stop){
+      // 停止に入ったら操作をすべて初期状態にし、モードも―に戻す（復帰後はスタンバイから選び直す）
+      resetControls();
+      s.mode = null;
+      $('recoverNote').textContent = '';
+    }
+    s.stop = stop;
+    s.stopErr = st.err;
+    render();
+  }
+
   // ルート番号は本機の値に合わせる（押した直後は本機の反映待ちなので画面の値を優先）
   if (performance.now() - lastRoutePress > 500 && st.route !== s.route){ s.route = st.route; render(); }
   // 自動運転の表示は本機の状態に合わせる
-  if (s.mode === 2){
+  if (s.mode === 2 && !s.stop){
     const started = st.flow === 9 || st.flow === 10;
-    if (started !== s.autoStarted){ s.autoStarted = started; render(); }
+    if (started !== s.autoStarted){ s.autoStarted = started; if (!started) s.pause = 0; render(); }
   }
 }
 
@@ -341,8 +427,10 @@ async function connect(){
     await stChar.startNotifications();
     stChar.addEventListener('characteristicvaluechanged', e => onStatus(e.target.value));
     stopReq = false;
+    connected = true;
     setStatus(true, device.name || '接続済み');
     timer = setInterval(sendFrame, SEND_INTERVAL_MS);
+    render();
   } catch(e) {
     console.warn(e);
     setStatus(false, e.name === 'NotFoundError' ? '未接続' : '接続失敗');
@@ -351,23 +439,25 @@ async function connect(){
 }
 function onDisconnected(){
   clearInterval(timer); timer = null;
-  ctrlChar = null; busy = false;
+  ctrlChar = null; busy = false; connected = false;
+  resetControls();
+  s.mode = null; s.stop = null; s.stopErr = 0;
   ['fFlow','fRtk','fBat','fRtt','fErr'].forEach(id => $(id).textContent = '—');
   setStatus(false, '切断されました');
+  render();
 }
 $('connectBtn').addEventListener('click', () => {
   if (device && device.gatt.connected) device.gatt.disconnect();
   else connect();
 });
 
-// 画面が裏に回ったら停止要求を送る（仕様：アプリが裏に回ったとき）
+// 画面が裏に回ったら停止要求を送る
 document.addEventListener('visibilitychange', () => {
   if (document.hidden){ stopReq = true; sendFrame(); }
   else { stopReq = false; }
 });
 
 // ---------------- 操作部 ----------------
-// モード切替
 document.querySelectorAll('#modeSw button').forEach(b => b.addEventListener('pointerdown', e => {
   e.preventDefault(); setMode(Number(b.dataset.v));
 }));
@@ -375,21 +465,23 @@ document.querySelectorAll('#modeSw button').forEach(b => b.addEventListener('poi
 // オルタネイトボタン
 document.querySelectorAll('.tg').forEach(b => b.addEventListener('pointerdown', e => {
   e.preventDefault();
+  if (s.stop || b.classList.contains('dis') || b.classList.contains('hidden')) return;
   const k = b.dataset.key;
-  if (k === 'slope' && !s.top) return;          // 法面は上面がONのときだけ
   s[k] = s[k] ? 0 : 1;
-  if (k === 'top' && !s.top) s.slope = 0;       // 上面OFFで法面もOFF
   if (k === 'rec' && !s.rec) s.pause = 0;       // 記録OFFで一時停止も解除
   render();
 }));
 
-// 押しボタン（ルート−1 / 決定 / ルート+1 / 開始）
+// 押しボタン
 let noteTimer = null;
 document.querySelectorAll('.pb').forEach(b => {
   b.addEventListener('pointerdown', e => {
     e.preventDefault();
+    if (b.classList.contains('dis')) return;
+    const ev = b.dataset.ev;
+    if (s.stop && !(s.stop === 'abn' && ev === 'recover')) return;   // 停止中は復帰以外押せない
     b.classList.add('pressed');
-    switch (b.dataset.ev){
+    switch (ev){
       case 'up':
         cnt.up = (cnt.up + 1) & 0xFF;
         s.route = Math.min(255, s.route + 1); lastRoutePress = performance.now(); $('routeNote').textContent = ''; break;
@@ -400,9 +492,15 @@ document.querySelectorAll('.pb').forEach(b => {
         cnt.decide = (cnt.decide + 1) & 0xFF;
         $('routeNote').textContent = `ルート ${s.route} に決定`;
         clearTimeout(noteTimer); noteTimer = setTimeout(() => $('routeNote').textContent = '', 2500); break;
-      case 'start':      // 自動の「開始」は仕様v1の「決定」として送る
-        cnt.decide = (cnt.decide + 1) & 0xFF;
+      case 'start':
+        cnt.start = (cnt.start + 1) & 0xFF;
         s.pause = 0; s.autoStarted = true; break;
+      case 'end':
+        cnt.end = (cnt.end + 1) & 0xFF;
+        s.pause = 0; s.autoStarted = false; break;
+      case 'recover':
+        cnt.recover = (cnt.recover + 1) & 0xFF;
+        $('recoverNote').textContent = '復帰を送信しました…'; break;
     }
     render();
   });
@@ -432,7 +530,7 @@ let resetStick = () => {};
     knob.style.transform = 'translate(0px,0px)';
     set(0, 0);
   };
-  pad.addEventListener('pointerdown', e => { pid = e.pointerId; pad.setPointerCapture(pid); knob.style.transition = ''; move(e); });
+  pad.addEventListener('pointerdown', e => { if (s.stop) return; pid = e.pointerId; pad.setPointerCapture(pid); knob.style.transition = ''; move(e); });
   pad.addEventListener('pointermove', e => { if (e.pointerId === pid) move(e); });
   pad.addEventListener('pointerup', e => { if (e.pointerId === pid) resetStick(); });
   pad.addEventListener('pointercancel', e => { if (e.pointerId === pid) resetStick(); });
@@ -448,7 +546,7 @@ let resetStick = () => {};
     s.arm = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 100);
     show(s.arm);
   };
-  track.addEventListener('pointerdown', e => { pid = e.pointerId; track.setPointerCapture(pid); move(e); });
+  track.addEventListener('pointerdown', e => { if (s.stop) return; pid = e.pointerId; track.setPointerCapture(pid); move(e); });
   track.addEventListener('pointermove', e => { if (e.pointerId === pid) move(e); });
   const end = e => { if (e.pointerId === pid) pid = null; };
   track.addEventListener('pointerup', end);
