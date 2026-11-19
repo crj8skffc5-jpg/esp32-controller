@@ -90,6 +90,7 @@
     font-size:15px;font-weight:700;touch-action:none}
   .recbtn.recording{background:var(--ng);color:#fff}
   .recbtn small{display:block;font-size:10px;font-weight:600;opacity:.85}
+  .recbtn.dis{opacity:.25}
 
   /* 状態表示 */
   .badge{min-width:170px;padding:7px 14px;border-radius:999px;text-align:center;font-size:14px;font-weight:700;
@@ -100,11 +101,17 @@
   .badge.pause::before{content:"❚❚";margin-right:6px;letter-spacing:-2px}
   .badge.run{background:rgba(60,207,122,.15);color:var(--ok);border-color:var(--ok)}
   .badge.run::before{content:"▶";margin-right:6px}
+  .badge.check{background:rgba(63,167,255,.15);color:var(--accent);border-color:var(--accent)}
+  .badge.check::before{content:"⟳";margin-right:6px}
+  .badge.done{background:rgba(60,207,122,.15);color:var(--ok);border-color:var(--ok)}
+  .badge.done::before{content:"✓";margin-right:6px}
   @keyframes blink{50%{opacity:0}}
 
   /* 停止画面 */
   .stopTitle{font-size:34px;font-weight:800;letter-spacing:.08em}
-  #pAbn .stopTitle{color:var(--warn)}
+  #pAbn .stopTitle, #pChkErr .stopTitle{color:var(--warn)}
+  #pChkErr .stopTitle{font-size:clamp(20px,7.2vw,34px)}   /* 縦向きでも1行に収める */
+  #pChk .stopTitle{color:var(--accent);font-size:clamp(20px,7vw,28px);animation:blink 1.6s steps(2) infinite}
   #pEstop .stopTitle{color:var(--ng);animation:blink 1.2s steps(2) infinite}
   #pEstop{background:repeating-linear-gradient(45deg,rgba(255,93,93,.07) 0 18px,transparent 18px 36px);border-radius:16px}
   .reason{font-size:15px;color:var(--text);text-align:center}
@@ -134,7 +141,8 @@
   .cell.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
   footer{padding:5px 12px 8px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);
-    display:flex;gap:14px;align-items:center;white-space:nowrap;overflow:hidden}
+    display:flex;flex-wrap:wrap;column-gap:14px;row-gap:2px;align-items:center;overflow:hidden}
+  footer span{white-space:nowrap}
   footer b{color:var(--text);font-weight:600}
   footer b.ng{color:var(--ng)}
 
@@ -167,7 +175,10 @@
 
   <!-- モード未選択（―） -->
   <section id="pNone" class="panel show">
-    <div class="msg" id="noneMsg">「接続」を押して本機とつないでください</div>
+    <div class="col">
+      <div class="msg" id="noneMsg">「接続」を押して本機とつないでください</div>
+      <div class="lbl" id="wakeNote"></div>
+    </div>
   </section>
 
   <!-- スタンバイ：ルート選択・決定 -->
@@ -239,6 +250,26 @@
     </div>
   </section>
 
+  <!-- システムチェック中（起動時・復帰時）：操作不可 -->
+  <section id="pChk" class="panel">
+    <div class="col">
+      <div class="stopTitle">システムチェック中</div>
+      <div class="reason" id="chkName">—</div>
+      <div class="msg">しばらくお待ちください</div>
+    </div>
+  </section>
+
+  <!-- システムチェック異常：再チェックボタンのみ -->
+  <section id="pChkErr" class="panel">
+    <div class="col">
+      <div class="stopTitle">システムチェック異常</div>
+      <div class="reason" id="chkErrName">—</div>
+      <div class="reason" id="chkErrReason">—</div>
+      <button class="pb recover" data-ev="recheck">再チェック</button>
+      <div class="lbl" id="recheckNote">原因を取り除いてから「再チェック」を押してください</div>
+    </div>
+  </section>
+
   <!-- 非常停止：操作不可 -->
   <section id="pEstop" class="panel">
     <div class="col">
@@ -254,6 +285,7 @@
   <span>電池 <b id="fBat">—</b></span>
   <span>遅延 <b id="fRtt">—</b></span>
   <span>異常 <b id="fErr">—</b></span>
+  <span>画面 <b id="fWake">—</b></span>
 </footer>
 
 <script>
@@ -268,12 +300,17 @@ const ROUTE_MIN = 1, ROUTE_MAX = 30;
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
 const FLOW = ['起動時チェック','スタンバイ','手動運転前チェック','操作待機','手動操作','記録中','記録一時停止',
-              '運転待機','運転前チェック','自動運転中','自動運転一時停止','非常停止','異常停止','異常停止（保護）','作業完了'];
+              '運転待機','運転前チェック','自動運転中','自動運転一時停止','非常停止','異常停止','異常停止（保護）','作業完了',
+              '復帰時チェック'];
 const ERR  = ['なし','非常停止ボタン','GPSロスト','通信途絶','転倒・持ち上げ','衝突検知','人検知','電源電圧の異常',
               '走行異常','記録の書き込み失敗','記録を読めない','開始地点から離れている','初期位置にない'];
 const RTK  = ['なし','単独','Float','Fix'];
 const MODE_NAME = ['スタンバイ','手動','自動'];
 const FLOW_ESTOP = 11, FLOW_ABN = 12, FLOW_PROTECT = 13;
+// システムチェックの状態コード（異常コードが 0 以外なら「チェック異常」で再チェック待ち）
+const CHECK_NAME = {0:'起動時システムチェック', 2:'手動操作前システムチェック', 8:'自動運転前システムチェック', 15:'復帰時システムチェック'};
+// 自動の状態コード → 画面の段階（開始待ち・自動運転前チェック中・運転中（一時停止を含む）・作業完了）
+const AUTO_PHASE = {7:'idle', 8:'check', 9:'run', 10:'run', 14:'done'};
 
 const $ = id => document.getElementById(id);
 
@@ -286,24 +323,30 @@ const s = {
   arm: 0,             // 法面トリマー長さの目標 0〜100
   route: 1,           // 表示中のルート番号 1〜30
   decided: false,     // ルート決定済み（ルート±1を押すと取り消し。モード変更・停止・切断では取り消さない）
-  autoStarted: false,
-  stop: null,         // 本機の停止状態 null / 'abn'（異常停止） / 'estop'（非常停止）
-  stopErr: 0
+  autoPhase: 'idle',  // 自動の段階 'idle' 開始待ち / 'check' 自動運転前チェック中 / 'run' 運転中 / 'done' 作業完了
+  flow: null,         // 本機の状態コード（最後に届いたもの）
+  stop: null,         // 操作できない画面 null / 'abn' 異常停止 / 'estop' 非常停止 / 'chk' システムチェック中 / 'chkerr' チェック異常
+  stopErr: 0,         // その異常コード
+  stopFlow: null      // その状態コード（どのチェックか）
 };
 // 0:全OFF 1:上面のみ 2:上面＋法面 3:法面のみ
 const trimmerCode = () => s.top ? (s.slope ? 2 : 1) : (s.slope ? 3 : 0);
 // 一時停止中か（手動で記録中、または自動で運転中のときだけ一時停止がある）
-const isPaused = () => !!s.pause && ((s.mode === 1 && !!s.rec) || (s.mode === 2 && s.autoStarted));
+const isPaused = () => !!s.pause && ((s.mode === 1 && !!s.rec) || (s.mode === 2 && s.autoPhase === 'run'));
+// 手動操作前システムチェック中か（手動にしてから本機が受け取るまでと、本機のチェックが終わるまで）
+const manualCheck = () => s.mode === 1 && (pending.mode !== null || s.flow === 2);
 
 // 押した回数（UInt8、255の次は0）
 const cnt = {decide:0, up:0, down:0, start:0, end:0, recover:0};
 
 let device = null, ctrlChar = null, connected = false, busy = false, timer = null, seq = 0, stopReq = false;
+// synced：つないだあと最初の状態データが届き、画面を本機に合わせた（それまでは操作データを送らない）
+let synced = false, syncSlow = false, syncTimer = null;
 const sentAt = new Float64Array(65536);
 
 // 押した操作を本機が受け取るまでは、本機から届く表示で画面を上書きしない（ちらつき防止）。
 // 状態データの「最後に受け取った通し番号」が、押した直後に送るフレームの番号に届いたら受け取り済み。
-const pending = {route: null, auto: null};
+const pending = {route: null, auto: null, mode: null};
 const nextSeq = () => (seq + 1) & 0xFFFF;
 const reached = (got, want) => ((got - want) & 0xFFFF) < 0x8000;   // got ≥ want（65535→0 の折り返し込み）
 
@@ -311,31 +354,62 @@ if (!navigator.bluetooth) $('warn').style.display = 'block';
 
 // そのモードに今切り替えられるか
 function canSelectMode(v){
-  if (!connected || s.stop || isPaused()) return false;   // 未接続・停止中・一時停止中は切り替え不可
-  if (v === 0) return true;                               // スタンバイはいつでも
-  return s.mode !== null && s.decided;                    // 手動・自動はスタンバイでルートを決定してから
+  if (!connected || !synced || s.stop || isPaused()) return false;   // 未接続・読み込み中・停止中・一時停止中は切り替え不可
+  if (v === 0) return true;                                         // スタンバイはいつでも
+  if (s.mode === 2 && s.autoPhase === 'done') return false;         // 作業完了：先にスタンバイに戻す
+  return s.mode !== null && s.decided;                              // 手動・自動はスタンバイでルートを決定してから
+}
+
+// ---------------- 画面を消さない（つないでいる間。Screen Wake Lock：iOS 18.4 以降など）----------------
+let wakeLock = null, wakeBusy = false, wakeState = '';   // wakeState：'' 未接続 / 'on' 消さない / 'ng' できない
+async function keepAwake(){
+  if (!connected || document.hidden || wakeLock || wakeBusy) return;
+  if (!('wakeLock' in navigator)){ wakeState = 'ng'; render(); return; }
+  wakeBusy = true;
+  try {
+    const lock = await navigator.wakeLock.request('screen');
+    if (!connected){ lock.release().catch(() => {}); return; }
+    wakeLock = lock;
+    lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });   // 裏に回ると外れる。表に戻ったらかけ直す
+    wakeState = 'on';
+  } catch(e) {
+    console.warn('画面を消さない設定ができませんでした', e);
+    wakeState = 'ng';
+  } finally {
+    wakeBusy = false;
+    render();
+  }
+}
+function releaseAwake(){
+  const lock = wakeLock;
+  wakeLock = null; wakeState = '';
+  if (lock) lock.release().catch(() => {});
 }
 
 // ---------------- 画面の反映 ----------------
 function render(){
   const view = s.stop ?? (s.mode === null ? 'none' : ['standby','manual','auto'][s.mode]);
-  const paused = isPaused();
+  const paused = isPaused(), mcheck = manualCheck();
   $('main').classList.toggle('stopped', !!s.stop);
-  $('pNone').classList.toggle('show', view === 'none');
-  $('pStandby').classList.toggle('show', view === 'standby');
-  $('pManual').classList.toggle('show', view === 'manual');
-  $('pAuto').classList.toggle('show', view === 'auto');
-  $('pAbn').classList.toggle('show', view === 'abn');
-  $('pEstop').classList.toggle('show', view === 'estop');
+  [['pNone','none'], ['pStandby','standby'], ['pManual','manual'], ['pAuto','auto'],
+   ['pAbn','abn'], ['pEstop','estop'], ['pChk','chk'], ['pChkErr','chkerr']]
+    .forEach(([id, v]) => $(id).classList.toggle('show', view === v));
 
   // モード切替
   $('modeName').textContent = s.mode === null ? '―' : MODE_NAME[s.mode];
   document.querySelectorAll('#modeSw button').forEach(b => {
     const v = Number(b.dataset.v);
     b.classList.toggle('on', v === s.mode);
-    b.classList.toggle('dis', !canSelectMode(v));
+    b.classList.toggle('dis', v !== s.mode && !canSelectMode(v));   // 今のモードは暗くしない
   });
-  $('noneMsg').textContent = connected ? '「スタンバイ」を選んでください' : '「接続」を押して本機とつないでください';
+  $('noneMsg').textContent = !connected ? '「接続」を押して本機とつないでください'
+    : !synced ? (syncSlow ? '本機から状態が届きません。本機の電源とスケッチを確認してください' : '本機の状態を読み込み中…')
+    : '「スタンバイ」を選んでください';
+  $('wakeNote').textContent = connected && wakeState === 'ng'
+    ? 'このブラウザでは画面を消さない設定ができません。iPhoneの［設定］→［画面表示と明るさ］→［自動ロック］を「なし」にしてください' : '';
+  const fw = $('fWake');
+  fw.textContent = wakeState === 'on' ? '消さない' : wakeState === 'ng' ? '自動ロック注意' : '—';
+  fw.classList.toggle('ng', wakeState === 'ng');
 
   // ルート
   $('routeVal').textContent = s.route;
@@ -344,35 +418,42 @@ function render(){
   rn.textContent = s.decided ? `ルート ${s.route} に決定済み` : '「決定」を押すと手動・自動を選べます';
 
   // 手動（一時停止中は上面・法面・移動・スライダーを押せない。記録終了と一時停止の解除は押せる）
+  //       手動操作前システムチェック中は、モード切替のほかは押せない
+  const lockM = paused || mcheck;
   document.querySelectorAll('.tg').forEach(b => b.classList.toggle('on', !!s[b.dataset.key]));
-  document.querySelectorAll('.tg[data-key=top], .tg[data-key=slope]').forEach(b => b.classList.toggle('dis', paused));
+  document.querySelectorAll('.tg[data-key=top], .tg[data-key=slope]').forEach(b => b.classList.toggle('dis', lockM));
   $('pauseManual').classList.toggle('hidden', !s.rec);   // 一時停止は記録中のみ出現
-  $('move').classList.toggle('locked', paused);
-  $('slider').classList.toggle('locked', paused);
+  $('move').classList.toggle('locked', lockM);
+  $('slider').classList.toggle('locked', lockM);
   $('recBtn').classList.toggle('recording', !!s.rec);
+  $('recBtn').classList.toggle('dis', mcheck);
   $('recLabel').textContent = s.rec ? '記録終了' : '● 記録開始';
   $('recSub').textContent = s.rec ? '長押し' : '';
 
   const rb = $('recBadge');
-  rb.className = 'badge' + (s.rec ? (s.pause ? ' pause' : ' rec') : '');
-  rb.textContent = s.rec ? (s.pause ? '記録一時停止中' : '記録中') : '記録していません';
+  rb.className = 'badge' + (mcheck ? ' check' : s.rec ? (s.pause ? ' pause' : ' rec') : '');
+  rb.textContent = mcheck ? '手動操作前チェック中…' : s.rec ? (s.pause ? '記録一時停止中' : '記録中') : '記録していません';
 
-  // 自動：開始は開始前だけ、一時停止と終了は開始後だけ（終了は一時停止中も押せる）
-  const ab = $('autoBadge');
-  ab.className = 'badge' + (s.autoStarted ? (s.pause ? ' pause' : ' run') : '');
-  ab.textContent = s.autoStarted ? (s.pause ? '一時停止中' : '自動運転中') : '開始待ち';
-  $('btnStart').classList.toggle('dis', s.autoStarted);
-  $('pauseAuto').classList.toggle('dis', !s.autoStarted);
-  $('btnEnd').classList.toggle('dis', !s.autoStarted);
+  // 自動：開始は開始待ちのときだけ、一時停止は運転中だけ、終了は自動運転前チェック中と運転中（一時停止中も押せる）
+  const ph = s.autoPhase, ab = $('autoBadge');
+  ab.className = 'badge' + ({check: ' check', run: s.pause ? ' pause' : ' run', done: ' done'}[ph] ?? '');
+  ab.textContent = {idle: '開始待ち', check: '自動運転前チェック中…', run: s.pause ? '一時停止中' : '自動運転中',
+                    done: '作業完了：スタンバイに戻してください'}[ph];
+  $('btnStart').classList.toggle('dis', ph !== 'idle');
+  $('pauseAuto').classList.toggle('dis', ph !== 'run');
+  $('btnEnd').classList.toggle('dis', ph !== 'run' && ph !== 'check');
 
-  // 異常停止の理由
+  // 異常停止の理由・システムチェック
   $('abnReason').textContent = s.stopErr ? `原因：${ERR[s.stopErr] ?? 'コード' + s.stopErr}` : '安全を確認して「復帰」を押してください';
+  $('chkName').textContent = CHECK_NAME[s.stopFlow] ?? '';
+  $('chkErrName').textContent = CHECK_NAME[s.stopFlow] ?? '';
+  $('chkErrReason').textContent = `原因：${ERR[s.stopErr] ?? 'コード' + s.stopErr}`;
 }
 
 // 刃・記録・一時停止・移動・自動運転を初期状態に戻す
 function resetControls(){
   s.top = s.slope = s.rec = s.pause = 0;
-  s.autoStarted = false;
+  s.autoPhase = 'idle';
   resetMove();
   cancelHolds();
 }
@@ -381,6 +462,7 @@ function setMode(m){
   if (m === s.mode || !canSelectMode(m)) return;
   s.mode = m;
   resetControls();
+  pending.mode = nextSeq();      // 本機が受け取るまでは本機の表示で上書きしない（手動は「チェック中」として扱う）
   render();
 }
 
@@ -402,7 +484,7 @@ function buildFrame(){
   if (!document.hidden && !stopReq) flags |= 0x01;   // bit0 操作有効
   if (stopReq) flags |= 0x02;                        // bit1 停止要求
   buf[3] = flags;
-  const driving = s.mode === 1 && !s.stop && !isPaused();   // 一時停止中は移動を中立で送る
+  const driving = s.mode === 1 && !s.stop && !isPaused() && !manualCheck();   // 一時停止中・チェック中は移動を中立で送る
   dv.setInt8(4, driving ? s.fwd : 0);
   dv.setInt8(5, driving ? s.turn : 0);
   buf[6] = s.mode ?? 0;          // ―はスタンバイとして送る
@@ -421,7 +503,7 @@ function buildFrame(){
 }
 
 async function sendFrame(){
-  if (busy || !ctrlChar) return;
+  if (busy || !ctrlChar || !synced) return;   // 最初の状態データが届くまでは送らない
   busy = true;
   try {
     const f = buildFrame();
@@ -435,7 +517,7 @@ async function sendFrame(){
 }
 
 function onStatus(dv){
-  if (dv.byteLength < 13) return;
+  if (dv.byteLength < 13 || !ctrlChar) return;
   const st = {
     mode: dv.getUint8(1), flow: dv.getUint8(2), route: dv.getUint8(3), err: dv.getUint8(4),
     rtk: dv.getUint8(5), volt: dv.getUint16(6, true), seq: dv.getUint16(9, true), age: dv.getUint16(11, true)
@@ -449,18 +531,49 @@ function onStatus(dv){
   const t0 = sentAt[st.seq];
   if (t0) $('fRtt').textContent = Math.max(0, Math.round(performance.now() - t0 - st.age)) + 'ms';
 
-  // 停止状態（本機の判断に従う）
-  const stop = st.flow === FLOW_ESTOP ? 'estop' : (st.flow === FLOW_ABN || st.flow === FLOW_PROTECT ? 'abn' : null);
-  if (stop !== s.stop || (stop && st.err !== s.stopErr)){
-    if (stop && !s.stop){
-      // 停止に入ったら操作をすべて初期状態にし、モードも―に戻す（ルートの決定はそのまま）
-      resetControls();
-      s.mode = null;
+  let dirty = false;
+
+  // つないだ直後：本機の今の状態に画面を合わせてから、操作データを送り始める
+  //   自動（運転待機・チェック中・運転中・一時停止・作業完了）なら自動の画面に。ほかはモード―
+  //   （自動運転中に通信が切れても本機は走り続けるので、つなぎ直したら一時停止・終了を押せるようにする）
+  if (!synced){
+    synced = true; syncSlow = false; clearTimeout(syncTimer);
+    if (st.route !== s.route){ s.route = st.route; s.decided = false; }
+    const ph = AUTO_PHASE[st.flow];
+    if (st.mode === 2 && ph){ s.mode = 2; s.decided = true; s.autoPhase = ph; s.pause = st.flow === 10 ? 1 : 0; }
+    else s.mode = null;
+    dirty = true;
+  }
+  if (st.flow !== s.flow){ s.flow = st.flow; dirty = true; }
+
+  // 停止・システムチェックの画面（本機の判断に従う）
+  let stop = null;
+  if (st.flow === FLOW_ESTOP) stop = 'estop';
+  else if (st.flow === FLOW_ABN || st.flow === FLOW_PROTECT) stop = 'abn';
+  else if (st.flow in CHECK_NAME && st.err) stop = 'chkerr';
+  else if (st.flow === 0 || st.flow === 15) stop = 'chk';
+  const stopFlow = stop ? st.flow : null;
+  if (stop !== s.stop || (stop && (st.err !== s.stopErr || stopFlow !== s.stopFlow))){
+    if (stop && !s.stop) resetControls();                    // 操作をすべて初期状態に（ルートの決定はそのまま）
+    if (stop === 'estop' || stop === 'abn') s.mode = null;    // 非常停止・異常停止はモードも―に戻す
+    if (stop !== s.stop){
       $('recoverNote').textContent = '';
+      $('recheckNote').textContent = '原因を取り除いてから「再チェック」を押してください';
     }
-    s.stop = stop;
-    s.stopErr = st.err;
-    render();
+    s.stop = stop; s.stopErr = st.err; s.stopFlow = stopFlow;
+    dirty = true;
+  }
+
+  // モード：押したモードを本機が受け取ってから確かめる。本機が切り替えなかったら（本機でルートが
+  // 決定されていない など）本機に合わせ、スタンバイに戻ったときは決定も取り消す
+  if (pending.mode !== null && reached(st.seq, pending.mode)){
+    pending.mode = null;
+    if (s.mode !== null && !s.stop && st.mode !== s.mode){
+      s.mode = st.mode <= 2 ? st.mode : 0;
+      if (s.mode === 0) s.decided = false;
+      resetControls();
+    }
+    dirty = true;
   }
 
   // ルート番号：押したルート±1を本機が受け取ってから、本機の値に合わせる。
@@ -469,15 +582,17 @@ function onStatus(dv){
   if (pending.route === null && st.route !== s.route){
     s.route = st.route;
     s.decided = false;
-    render();
+    dirty = true;
   }
 
-  // 自動運転の開始・終了：押した操作を本機が受け取ってから、本機の状態に合わせる
+  // 自動の段階：押した開始・終了を本機が受け取ってから、本機の状態に合わせる
   if (pending.auto !== null && reached(st.seq, pending.auto)) pending.auto = null;
-  if (s.mode === 2 && !s.stop && pending.auto === null){
-    const started = st.flow === 9 || st.flow === 10;
-    if (started !== s.autoStarted){ s.autoStarted = started; if (!started) s.pause = 0; render(); }
+  if (s.mode === 2 && !s.stop && pending.auto === null && pending.mode === null){
+    const ph = AUTO_PHASE[st.flow];
+    if (ph && ph !== s.autoPhase){ s.autoPhase = ph; if (ph !== 'run') s.pause = 0; dirty = true; }
   }
+
+  if (dirty) render();
 }
 
 async function connect(){
@@ -488,14 +603,19 @@ async function connect(){
     setStatus(false, '接続中…');
     const server = await device.gatt.connect();
     const service = await server.getPrimaryService(SVC);
-    ctrlChar = await service.getCharacteristic(CTRL);
+    synced = false; syncSlow = false;
+    const ctrl = await service.getCharacteristic(CTRL);
     const stChar = await service.getCharacteristic(STATUS);
-    await stChar.startNotifications();
+    ctrlChar = ctrl;
     stChar.addEventListener('characteristicvaluechanged', e => onStatus(e.target.value));
+    await stChar.startNotifications();
     stopReq = false;
     connected = true;
     setStatus(true, device.name || '接続済み');
     timer = setInterval(sendFrame, SEND_INTERVAL_MS);
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => { if (connected && !synced){ syncSlow = true; render(); } }, 3000);
+    keepAwake();
     render();
   } catch(e) {
     console.warn(e);
@@ -505,10 +625,12 @@ async function connect(){
 }
 function onDisconnected(){
   clearInterval(timer); timer = null;
-  ctrlChar = null; busy = false; connected = false;
-  pending.route = pending.auto = null;
+  clearTimeout(syncTimer);
+  ctrlChar = null; busy = false; connected = false; synced = false; syncSlow = false;
+  pending.route = pending.auto = pending.mode = null;
   resetControls();
-  s.mode = null; s.stop = null; s.stopErr = 0;   // ルートの決定はそのまま
+  s.mode = null; s.stop = null; s.stopErr = 0; s.stopFlow = null; s.flow = null;   // ルートの決定はそのまま
+  releaseAwake();
   ['fFlow','fRtk','fBat','fRtt','fErr'].forEach(id => $(id).textContent = '—');
   setStatus(false, '切断されました');
   render();
@@ -518,10 +640,15 @@ $('connectBtn').addEventListener('click', () => {
   else connect();
 });
 
-// 画面が裏に回ったら停止要求を送る
+// 画面が裏に回ったら停止要求を送る（自動のときは送らない：自動運転は通信が切れても止めない）。
+// 表に戻ったら、画面を消さない設定をかけ直す
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden){ stopReq = true; sendFrame(); }
-  else { stopReq = false; }
+  if (document.hidden){
+    if (s.mode !== 2){ stopReq = true; sendFrame(); }
+  } else {
+    stopReq = false;
+    keepAwake();
+  }
 });
 
 // 画面の回転などでスクロール位置がずれないように、常に左上に戻す
@@ -550,7 +677,8 @@ document.querySelectorAll('.pb:not(.hold)').forEach(b => {
     e.preventDefault();
     if (b.classList.contains('dis')) return;
     const ev = b.dataset.ev;
-    if (s.stop && !(s.stop === 'abn' && ev === 'recover')) return;   // 停止中は復帰以外押せない
+    const allowed = (s.stop === 'abn' && ev === 'recover') || (s.stop === 'chkerr' && ev === 'recheck');
+    if (s.stop && !allowed) return;   // 停止中・チェック中は「復帰」「再チェック」以外押せない
     b.classList.add('pressed');
     switch (ev){
       case 'up':     // 30の次は1
@@ -566,10 +694,13 @@ document.querySelectorAll('.pb:not(.hold)').forEach(b => {
         s.decided = true; break;
       case 'start':
         cnt.start = (cnt.start + 1) & 0xFF;
-        s.pause = 0; s.autoStarted = true; pending.auto = nextSeq(); break;
+        s.pause = 0; s.autoPhase = 'check'; pending.auto = nextSeq(); break;
       case 'recover':
         cnt.recover = (cnt.recover + 1) & 0xFF;
         $('recoverNote').textContent = '復帰を送信しました…'; break;
+      case 'recheck':   // 「復帰」と同じ回数を使う（本機はチェック異常のときは再チェックとして扱う）
+        cnt.recover = (cnt.recover + 1) & 0xFF;
+        $('recheckNote').textContent = '再チェックを送信しました…'; break;
     }
     render();
   });
@@ -602,7 +733,7 @@ function makeHold(btn, {tap, canHold, done}){
 // 記録開始（1回押す）⇔ 記録終了（長押し。一時停止中も可）
 makeHold($('recBtn'), {
   tap: () => {
-    if (s.mode !== 1 || s.rec) return false;
+    if (s.mode !== 1 || s.rec || manualCheck()) return false;
     s.rec = 1; render(); return true;
   },
   canHold: () => s.mode === 1 && !!s.rec,
@@ -611,10 +742,10 @@ makeHold($('recBtn'), {
 
 // 自動の終了（長押し。一時停止中も可）
 makeHold($('btnEnd'), {
-  canHold: () => s.mode === 2 && s.autoStarted,
+  canHold: () => s.mode === 2 && (s.autoPhase === 'run' || s.autoPhase === 'check'),
   done: () => {
     cnt.end = (cnt.end + 1) & 0xFF;
-    s.pause = 0; s.autoStarted = false; pending.auto = nextSeq();
+    s.pause = 0; s.autoPhase = 'idle'; pending.auto = nextSeq();
     render();
   }
 });
@@ -633,7 +764,7 @@ let resetMove = () => {};
       Number(c.dataset.f) * 100 === fwd && Number(c.dataset.t) * 100 === turn));
   };
   const move = e => {
-    if (s.stop || isPaused()){ resetMove(); return; }
+    if (s.stop || isPaused() || manualCheck()){ resetMove(); return; }
     const r = pad.getBoundingClientRect();
     const col = Math.max(0, Math.min(2, Math.floor((e.clientX - r.left) / r.width * 3)));
     const row = Math.max(0, Math.min(2, Math.floor((e.clientY - r.top) / r.height * 3)));
@@ -641,7 +772,7 @@ let resetMove = () => {};
   };
   resetMove = () => { pid = null; set(0, 0); };
   pad.addEventListener('pointerdown', e => {
-    if (pid !== null || s.stop || isPaused()) return;    // 2本目の指は無視
+    if (pid !== null || s.stop || isPaused() || manualCheck()) return;    // 2本目の指は無視
     pid = e.pointerId; pad.setPointerCapture(pid); move(e);
   });
   pad.addEventListener('pointermove', e => { if (e.pointerId === pid) move(e); });
@@ -655,13 +786,13 @@ let resetMove = () => {};
   let pid = null;
   const show = v => { fill.style.width = v + '%'; thumb.style.left = v + '%'; $('slVal').textContent = v; };
   const move = e => {
-    if (s.stop || isPaused()){ pid = null; return; }
+    if (s.stop || isPaused() || manualCheck()){ pid = null; return; }
     const r = rail.getBoundingClientRect();
     s.arm = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 100);
     show(s.arm);
   };
   track.addEventListener('pointerdown', e => {
-    if (s.stop || isPaused()) return;
+    if (s.stop || isPaused() || manualCheck()) return;
     pid = e.pointerId; track.setPointerCapture(pid); move(e);
   });
   track.addEventListener('pointermove', e => { if (e.pointerId === pid) move(e); });
