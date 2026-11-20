@@ -140,6 +140,21 @@
   .cell.center{background:transparent;border-color:transparent;color:var(--muted);font-size:11px;font-weight:600}
   .cell.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
+  /* 遠隔操作（BLE が切れているとき） */
+  #pRemote .col{gap:10px;max-width:min(560px,94vw)}
+  .rbox{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 18px;border:1px solid var(--line);
+    border-radius:14px;background:var(--panel);min-width:min(420px,90vw)}
+  .rbox .reason.ng, .rbox .lbl.ng{color:var(--ng)}
+  .rbtn{height:64px;min-width:200px;font-size:20px;font-weight:700;background:var(--warn);color:#2a2000}
+  .rbtn.resume{background:var(--ok);color:#06210f}
+  .rbtn small{display:block;font-size:11px;font-weight:600;opacity:.85}
+  .rb{border:0;border-radius:10px;padding:10px 18px;font-size:15px;font-weight:600;background:#2a313b;color:var(--text)}
+  .rb.ok{background:var(--accent);color:#fff}
+  .rlink{border:0;background:transparent;color:var(--muted);font-size:12px;text-decoration:underline;padding:4px}
+  #rKey{-webkit-user-select:text;user-select:text;font-size:16px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
+    background:#0d1014;color:var(--text);width:min(300px,80vw)}
+  #rKeyBox{display:flex;flex-direction:column;align-items:center;gap:10px}
+
   footer{padding:5px 12px 8px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);
     display:flex;flex-wrap:wrap;column-gap:14px;row-gap:2px;align-items:center;overflow:hidden}
   footer span{white-space:nowrap}
@@ -170,6 +185,30 @@
       <button data-v="2">自動</button>
       <button data-v="0">スタンバイ</button>
       <button data-v="1">手動</button>
+    </div>
+  </section>
+
+  <!-- BLE が切れているとき：インターネット経由の遠隔操作（自動運転の一時停止・解除）-->
+  <section id="pRemote" class="panel">
+    <div class="col">
+      <div class="msg">「接続」を押すと、BLE で本機とつなぎます</div>
+      <div class="rbox">
+        <div class="lbl">遠隔操作（インターネット経由）</div>
+        <div id="rKeyBox">
+          <div class="lbl">合言葉（T-SIM のスケッチの REMOTE_KEY と同じもの）</div>
+          <input id="rKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 placeholder="合言葉（8文字以上）">
+          <div><button class="rb ok" id="rKeySave">保存</button> <button class="rb" id="rKeyCancel">やめる</button></div>
+          <div class="lbl" id="rKeyNote"></div>
+        </div>
+        <div id="rBody" class="col">
+          <div class="reason" id="rState">—</div>
+          <div class="lbl" id="rAge"></div>
+          <button class="pb rbtn hold" id="rBtn"><span id="rLabel">一時停止</span><small id="rSub"></small><span class="bar"></span></button>
+          <div class="lbl" id="rNote"></div>
+          <button class="rlink" id="rKeyEdit">合言葉を変える</button>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -286,6 +325,7 @@
   <span>遅延 <b id="fRtt">—</b></span>
   <span>異常 <b id="fErr">—</b></span>
   <span>画面 <b id="fWake">—</b></span>
+  <span>遠隔 <b id="fRemote">—</b></span>
 </footer>
 
 <script>
@@ -362,13 +402,14 @@ function canSelectMode(v){
 
 // ---------------- 画面を消さない（つないでいる間。Screen Wake Lock：iOS 18.4 以降など）----------------
 let wakeLock = null, wakeBusy = false, wakeState = '';   // wakeState：'' 未接続 / 'on' 消さない / 'ng' できない
+const wakeWanted = () => connected || rm.up;             // BLE か遠隔操作がつながっている間
 async function keepAwake(){
-  if (!connected || document.hidden || wakeLock || wakeBusy) return;
+  if (!wakeWanted() || document.hidden || wakeLock || wakeBusy) return;
   if (!('wakeLock' in navigator)){ wakeState = 'ng'; render(); return; }
   wakeBusy = true;
   try {
     const lock = await navigator.wakeLock.request('screen');
-    if (!connected){ lock.release().catch(() => {}); return; }
+    if (!wakeWanted()){ lock.release().catch(() => {}); return; }
     wakeLock = lock;
     lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });   // 裏に回ると外れる。表に戻ったらかけ直す
     wakeState = 'on';
@@ -388,12 +429,14 @@ function releaseAwake(){
 
 // ---------------- 画面の反映 ----------------
 function render(){
-  const view = s.stop ?? (s.mode === null ? 'none' : ['standby','manual','auto'][s.mode]);
+  // BLE が切れているときは遠隔操作の画面
+  const view = !connected ? 'remote' : s.stop ?? (s.mode === null ? 'none' : ['standby','manual','auto'][s.mode]);
   const paused = isPaused(), mcheck = manualCheck();
-  $('main').classList.toggle('stopped', !!s.stop);
+  $('main').classList.toggle('stopped', !!s.stop || view === 'remote');
   [['pNone','none'], ['pStandby','standby'], ['pManual','manual'], ['pAuto','auto'],
-   ['pAbn','abn'], ['pEstop','estop'], ['pChk','chk'], ['pChkErr','chkerr']]
+   ['pAbn','abn'], ['pEstop','estop'], ['pChk','chk'], ['pChkErr','chkerr'], ['pRemote','remote']]
     .forEach(([id, v]) => $(id).classList.toggle('show', view === v));
+  renderRemote();
 
   // モード切替
   $('modeName').textContent = s.mode === null ? '―' : MODE_NAME[s.mode];
@@ -630,7 +673,7 @@ function onDisconnected(){
   pending.route = pending.auto = pending.mode = null;
   resetControls();
   s.mode = null; s.stop = null; s.stopErr = 0; s.stopFlow = null; s.flow = null;   // ルートの決定はそのまま
-  releaseAwake();
+  if (!wakeWanted()) releaseAwake();
   ['fFlow','fRtk','fBat','fRtt','fErr'].forEach(id => $(id).textContent = '—');
   setStatus(false, '切断されました');
   render();
@@ -648,6 +691,9 @@ document.addEventListener('visibilitychange', () => {
   } else {
     stopReq = false;
     keepAwake();
+    // 裏に回ると iPhone が遠隔の接続を切るので、表に戻ったらつなぎ直す（20 秒以上何も届いていなければ作り直す）
+    if (rm.ws && Date.now() - rm.rxAt > 20000) remoteStop();
+    remoteStart();
   }
 });
 
@@ -814,6 +860,232 @@ if (DEBUG){
     info.textContent = `x=${Math.round(e.clientX)} y=${Math.round(e.clientY)} → ${btn ? btn.textContent.trim() : (el ? el.id || el.tagName : 'なし')}（画面幅 ${innerWidth}）`;
   }, {capture: true});
 }
+
+// ---------------- 遠隔操作（インターネット経由。BLE が切れているときに使う）----------------
+//   アプリ → 中継サーバー（MQTT。WebSocket）→ T-SIM → 本機（IO39）
+//   命令「P,番号,ナンス,署名」（一時停止）／「R,…」（解除）。署名は HMAC-SHA256（鍵＝合言葉）の先頭 16 文字
+//   T-SIM は本機の状態を「JSON|署名」で 5 秒ごとに送る。署名が合わないもの（ほかの人が送ったもの）は使わない
+const MQTT_URL = 'wss://broker.hivemq.com:8884/mqtt';   // 中継サーバー（HiveMQ の公開の無料サーバー）
+const REMOTE_KEY_STORE = 'susanoo.remoteKey';
+const REMOTE_STALE_MS = 12000;     // 本機の状態がこれより古いと押せない（T-SIM は 5 秒ごとに送る）
+const REMOTE_WAIT_MS  = 10000;     // 押してから本機の返事を待つ時間
+const enc = new TextEncoder(), dec = new TextDecoder();
+const toHex = a => [...a].map(x => x.toString(16).padStart(2, '0')).join('');
+const rm = {
+  key: '', base: '', ckey: null,                     // 合言葉・トピックの名前・署名の鍵
+  ws: null, up: false, buf: new Uint8Array(0), retry: null, ping: null, subAt: 0, rxAt: 0,
+  state: null, at: 0, b: '', sq: -1, count: 0,       // 本機の状態・受け取った時刻・T-SIM の起動番号と通し番号・購読後の数
+  pend: null, note: '', noteNg: false, editing: false
+};
+const cryptoOk = !!(window.crypto && crypto.subtle && window.TextEncoder);
+
+async function hmac16(msg){
+  const sig = await crypto.subtle.sign('HMAC', rm.ckey, enc.encode(msg));
+  return toHex(new Uint8Array(sig)).slice(0, 16);
+}
+async function remoteSetKey(key){
+  rm.key = key;
+  rm.ckey = await crypto.subtle.importKey('raw', enc.encode(key), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode('topic:' + key)));
+  rm.base = 'susanoo/' + toHex(h).slice(0, 12);
+  rm.state = null; rm.b = ''; rm.sq = -1; rm.pend = null; rm.note = '';
+  remoteStop();
+  remoteStart();
+  render();
+}
+
+// MQTT 3.1.1 の packet
+function mqLen(n){ const o = []; do { let b = n % 128; n = Math.floor(n / 128); if (n) b |= 0x80; o.push(b); } while (n); return o; }
+function mqStr(s){ const b = enc.encode(s); return [b.length >> 8, b.length & 255, ...b]; }
+function mqPacket(head, body){ return new Uint8Array([head, ...mqLen(body.length), ...body]); }
+
+function remoteStart(){
+  if (!rm.key || rm.ws || document.hidden || !cryptoOk) return;
+  clearTimeout(rm.retry); rm.retry = null;
+  let ws;
+  try { ws = new WebSocket(MQTT_URL, 'mqtt'); } catch(e) { remoteRetry(); return; }
+  ws.binaryType = 'arraybuffer';
+  rm.ws = ws; rm.buf = new Uint8Array(0);
+  ws.onopen = () => {
+    const id = 'susanoo-app-' + toHex(crypto.getRandomValues(new Uint8Array(4)));
+    ws.send(mqPacket(0x10, [...mqStr('MQTT'), 4, 0x02, 0, 30, ...mqStr(id)]));   // 3.1.1・クリーンセッション・生存確認 30 秒
+  };
+  ws.onmessage = e => { if (rm.ws === ws) remoteBytes(new Uint8Array(e.data)); };
+  ws.onclose = ws.onerror = () => { if (rm.ws !== ws) return; remoteDown(); remoteRetry(); };
+}
+function remoteDown(){
+  clearInterval(rm.ping); rm.ping = null;
+  rm.ws = null; rm.up = false; rm.count = 0;
+  if (!wakeWanted()) releaseAwake();
+  render();
+}
+function remoteRetry(){
+  if (rm.key && !rm.retry) rm.retry = setTimeout(() => { rm.retry = null; remoteStart(); }, 3000);
+}
+function remoteStop(){
+  const ws = rm.ws;
+  clearTimeout(rm.retry); rm.retry = null;
+  if (ws){ rm.ws = null; try { ws.close(); } catch(e) {} remoteDown(); }
+}
+function remoteBytes(data){
+  rm.rxAt = Date.now();
+  const b = new Uint8Array(rm.buf.length + data.length);
+  b.set(rm.buf); b.set(data, rm.buf.length);
+  let p = 0;
+  while (b.length - p >= 2){
+    let rl = 0, mul = 1, i = p + 1, done = false;
+    while (i < b.length && i - p <= 4){ rl += (b[i] & 127) * mul; mul *= 128; if (!(b[i++] & 128)){ done = true; break; } }
+    if (!done || b.length < i + rl) break;          // まだそろっていない
+    remotePacket(b[p], b.slice(i, i + rl));
+    p = i + rl;
+  }
+  rm.buf = b.slice(p);
+}
+function remotePacket(head, body){
+  const ws = rm.ws;
+  if (!ws) return;
+  switch (head >> 4){
+    case 2:   // CONNACK
+      if (body[1] !== 0){ try { ws.close(); } catch(e) {} return; }
+      rm.up = true;
+      rm.count = 0; rm.subAt = Date.now();
+      ws.send(mqPacket(0x82, [0, 1, ...mqStr(rm.base + '/state'), 0]));        // 本機の状態を購読
+      clearInterval(rm.ping);
+      rm.ping = setInterval(() => { try { ws.send(new Uint8Array([0xC0, 0])); } catch(e) {} }, 15000);
+      keepAwake();
+      render();
+      break;
+    case 3: { // PUBLISH
+      const n = (body[0] << 8) | body[1];
+      const topic = dec.decode(body.slice(2, 2 + n));
+      const off = 2 + n + (((head >> 1) & 3) ? 2 : 0);
+      if (topic === rm.base + '/state') remoteState(dec.decode(body.slice(off)));
+      break;
+    }
+  }
+}
+async function remoteState(text){
+  const i = text.lastIndexOf('|');
+  if (i < 0) return;
+  const body = text.slice(0, i), sig = text.slice(i + 1);
+  if (await hmac16('S|' + body) !== sig) return;          // 署名が合わない：ほかの人が送ったものは使わない
+  let st;
+  try { st = JSON.parse(body); } catch(e) { return; }
+  if (st.off){ rm.state = {off: 1}; rm.at = Date.now(); rm.count = 0; render(); return; }   // T-SIM が切れた（遺言）
+  if (st.b === rm.b && st.s <= rm.sq) return;              // 古い状態の送り直し
+  rm.count = st.b === rm.b ? rm.count + 1 : 1;              // 購読してから 2 回目以降＝今の状態
+  rm.b = st.b; rm.sq = st.s; rm.state = st; rm.at = Date.now();
+  const pd = rm.pend;
+  if (pd){
+    const what = pd.kind === 'P' ? '一時停止' : '解除';
+    if (st.ack === pd.id && st.res){
+      rm.pend = null;
+      rm.noteNg = st.res !== 1;
+      rm.note = st.res === 1 ? (pd.kind === 'P' ? '本機が一時停止しました' : '本機が再開しました（動き出します）')
+              : st.res === 2 ? `本機が${what}を受け付けませんでした（自動運転中ではありません）`
+              : st.res === 3 ? '本機はまだ BLE がつながっていると判断しています。数秒待ってからもう一度押してください'
+              : '本機が命令を受け付けませんでした';
+    } else if (st.rj === pd.id && st.rw){
+      rm.pend = null; rm.noteNg = true;
+      rm.note = st.rw === 1 ? '番号が古くなっていました。もう一度押してください'
+              : st.rw === 2 ? '合言葉が T-SIM と違います。合言葉を確かめてください' : '命令の形が正しくありません';
+    } else if (st.fw === pd.id && !pd.fw){
+      pd.fw = true; rm.note = 'T-SIM が受け取りました。本機の返事を待っています…';
+    }
+  }
+  render();
+}
+const remoteFresh = () => rm.state && !rm.state.off && rm.count >= 2 && Date.now() - rm.at < REMOTE_STALE_MS;
+const remoteReady = () => rm.up && remoteFresh() && rm.state.link === 1;
+async function remoteSend(kind){
+  if (!remoteReady() || rm.pend) return;
+  const id = (crypto.getRandomValues(new Uint32Array(1))[0] >>> 1) || 1;
+  const nonce = rm.state.n;
+  const sig = await hmac16(`${kind}|${id}|${nonce}`);
+  if (!rm.ws || !rm.up) return;
+  rm.ws.send(mqPacket(0x30, [...mqStr(rm.base + '/cmd'), ...enc.encode(`${kind},${id},${nonce},${sig}`)]));
+  rm.pend = {id, kind, at: Date.now(), fw: false};
+  rm.note = kind === 'P' ? '一時停止を送りました…' : '解除を送りました…';
+  rm.noteNg = false;
+  render();
+}
+
+function renderRemote(){
+  const st = rm.state, now = Date.now();
+  const fr = $('fRemote');
+  fr.textContent = !rm.key ? '—' : rm.up ? '接続中' : '未接続';
+  fr.classList.toggle('ng', !!rm.key && !rm.up);
+  const editing = !rm.key || rm.editing;
+  $('rKeyBox').style.display = editing ? '' : 'none';
+  $('rBody').style.display = editing ? 'none' : '';
+  $('rKeyCancel').style.display = rm.key ? '' : 'none';
+  if (editing) return;
+  let text, ng = false;
+  if (!cryptoOk){ text = 'このブラウザでは遠隔操作が使えません（暗号の機能がない）'; ng = true; }
+  else if (!rm.up){ text = '中継サーバーにつながっていません（つなぎ直しています…）'; ng = true; }
+  else if (!st) text = now - rm.subAt > 10000 ? '本機の状態が届きません（T-SIM の電源・ネットと、合言葉が同じかを確認）' : '本機の状態を待っています…';
+  else if (st.off){ text = 'T-SIM がオフラインです（T-SIM のネットを確認）'; ng = true; }
+  else if (st.link !== 1){ text = 'T-SIM に本機のデータが届いていません'; ng = true; }
+  else text = `本機：${FLOW[st.f] ?? '状態' + st.f}（ルート ${st.r}）${st.p ? '・遠隔一時停止中' : ''}`;
+  $('rState').textContent = text;
+  $('rState').classList.toggle('ng', ng);
+  const age = st && !st.off ? Math.floor((now - rm.at) / 1000) : null;
+  const ageEl = $('rAge');
+  ageEl.textContent = age === null ? '' : rm.count < 2 ? '今の状態を確かめています…'
+    : now - rm.at >= REMOTE_STALE_MS ? `状態が更新されていません（${age} 秒前）` : `状態の受信：${age} 秒前`;
+  ageEl.classList.toggle('ng', age !== null && rm.count >= 2 && now - rm.at >= REMOTE_STALE_MS);
+  const ready = remoteReady(), run = ready && st.f === 9, paused = ready && st.f === 10;
+  const btn = $('rBtn');
+  btn.classList.toggle('dis', !(run || paused) || !!rm.pend);
+  btn.classList.toggle('resume', paused);
+  $('rLabel').textContent = paused ? '解除' : '一時停止';
+  $('rSub').textContent = paused ? '長押し（本機が動き出します）' : '';
+  const nt = $('rNote');
+  nt.textContent = rm.note || (ready && !run && !paused ? '押せるのは、自動運転中と一時停止中だけです' : '');
+  nt.classList.toggle('ng', !!rm.note && rm.noteNg);
+}
+
+// 一時停止は 1 回押す。解除（本機が動き出す）は長押し
+makeHold($('rBtn'), {
+  tap: () => {
+    if (connected || !remoteReady() || rm.pend || rm.state.f !== 9) return false;
+    remoteSend('P'); return true;
+  },
+  canHold: () => !connected && remoteReady() && !rm.pend && rm.state.f === 10,
+  done: () => remoteSend('R')
+});
+
+// 返事の待ち時間・状態の古さ
+setInterval(() => {
+  const pd = rm.pend;
+  if (pd && Date.now() - pd.at > REMOTE_WAIT_MS){
+    rm.pend = null; rm.noteNg = true;
+    rm.note = pd.fw ? '本機から返事がありません（T-SIM の TXD → 本機の IO39 の線、本機のスケッチを確認）'
+                    : '届いたか分かりません（中継サーバー・T-SIM のネットを確認）';
+  }
+  // 45 秒何も届かない（生存確認の返事もない）ときは、切れているのでつなぎ直す（モバイル回線では黙って切れることがある）
+  if (rm.ws && rm.up && Date.now() - rm.rxAt > 45000){ remoteStop(); remoteStart(); }
+  if (!connected) renderRemote();
+}, 1000);
+
+// 合言葉
+$('rKeySave').addEventListener('click', async () => {
+  const k = $('rKey').value.trim();
+  if (k.length < 8){ $('rKeyNote').textContent = '8 文字以上にしてください'; return; }
+  if (!cryptoOk){ $('rKeyNote').textContent = 'このブラウザでは遠隔操作が使えません'; return; }
+  try { localStorage.setItem(REMOTE_KEY_STORE, k); } catch(e) {}
+  $('rKey').value = ''; $('rKeyNote').textContent = '';
+  rm.editing = false;
+  $('rKey').blur();
+  await remoteSetKey(k);
+});
+$('rKeyCancel').addEventListener('click', () => { rm.editing = false; $('rKey').value = ''; $('rKeyNote').textContent = ''; render(); });
+$('rKeyEdit').addEventListener('click', () => { rm.editing = true; render(); });
+(async () => {
+  let k = '';
+  try { k = localStorage.getItem(REMOTE_KEY_STORE) || ''; } catch(e) {}
+  if (k && cryptoOk) await remoteSetKey(k);
+})();
 
 render();
 
