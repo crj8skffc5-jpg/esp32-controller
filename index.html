@@ -284,6 +284,7 @@
     <div class="col">
       <div class="stopTitle">異常停止</div>
       <div class="reason" id="abnReason">—</div>
+      <div class="msg" id="abnNext"></div>
       <button class="pb recover" data-ev="recover">復帰</button>
       <div class="lbl" id="recoverNote"></div>
     </div>
@@ -294,7 +295,7 @@
     <div class="col">
       <div class="stopTitle">システムチェック中</div>
       <div class="reason" id="chkName">—</div>
-      <div class="msg">しばらくお待ちください</div>
+      <div class="msg" id="chkMsg">しばらくお待ちください</div>
     </div>
   </section>
 
@@ -304,6 +305,7 @@
       <div class="stopTitle">システムチェック異常</div>
       <div class="reason" id="chkErrName">—</div>
       <div class="reason" id="chkErrReason">—</div>
+      <div class="msg" id="chkErrNext"></div>
       <button class="pb recover" data-ev="recheck">再チェック</button>
       <div class="lbl" id="recheckNote">原因を取り除いてから「再チェック」を押してください</div>
     </div>
@@ -346,7 +348,10 @@ const ERR  = ['なし','非常停止ボタン','GPSロスト','通信途絶','�
               '走行異常','記録の書き込み失敗','記録を読めない','開始地点から離れている','初期位置にない','AIカメラ異常'];
 const RTK  = ['なし','単独','Float','Fix'];
 const MODE_NAME = ['スタンバイ','手動','自動'];
-const FLOW_ESTOP = 11, FLOW_ABN = 12, FLOW_PROTECT = 13;
+const FLOW_ESTOP = 11, FLOW_ABN = 12, FLOW_PROTECT = 13, FLOW_RECOVER_CHECK = 15;
+// 自動運転中にこの異常コードで保護停止したときは、復帰時チェックが正常なら本機が自動運転を続ける（衝突・人検知）
+const ERR_COLLISION = 5, ERR_PERSON = 6;
+const resumableErr = e => e === ERR_COLLISION || e === ERR_PERSON;
 // システムチェックの状態コード（異常コードが 0 以外なら「チェック異常」で再チェック待ち）
 const CHECK_NAME = {0:'起動時システムチェック', 2:'手動操作前システムチェック', 8:'自動運転前システムチェック', 15:'復帰時システムチェック'};
 // 自動の状態コード → 画面の段階（開始待ち・自動運転前チェック中・運転中（一時停止を含む）・作業完了）
@@ -367,7 +372,8 @@ const s = {
   flow: null,         // 本機の状態コード（最後に届いたもの）
   stop: null,         // 操作できない画面 null / 'abn' 異常停止 / 'estop' 非常停止 / 'chk' システムチェック中 / 'chkerr' チェック異常
   stopErr: 0,         // その異常コード
-  stopFlow: null      // その状態コード（どのチェックか）
+  stopFlow: null,     // その状態コード（どのチェックか）
+  resume: false       // 自動運転中の保護停止（衝突・人検知）：復帰時チェックが正常なら自動運転を続ける。停止中もモードを「自動」で送る
 };
 // 0:全OFF 1:上面のみ 2:上面＋法面 3:法面のみ
 const trimmerCode = () => s.top ? (s.slope ? 2 : 1) : (s.slope ? 3 : 0);
@@ -488,6 +494,11 @@ function render(){
 
   // 異常停止の理由・システムチェック
   $('abnReason').textContent = s.stopErr ? `原因：${ERR[s.stopErr] ?? 'コード' + s.stopErr}` : '安全を確認して「復帰」を押してください';
+  $('abnNext').textContent = s.resume ? '周りの安全を確認して「復帰」を押すと、システムチェックのあと自動運転を再開します（本機が動き出します）'
+                                      : '安全を確認して「復帰」を押すと、システムチェックのあとスタンバイに戻ります';
+  const resumeChk = s.resume && s.stopFlow === FLOW_RECOVER_CHECK;
+  $('chkMsg').textContent = resumeChk ? 'しばらくお待ちください。正常なら自動運転を再開します（本機が動き出します）' : 'しばらくお待ちください';
+  $('chkErrNext').textContent = resumeChk ? '再チェックが正常なら、自動運転を再開します（本機が動き出します）' : '';
   $('chkName').textContent = CHECK_NAME[s.stopFlow] ?? '';
   $('chkErrName').textContent = CHECK_NAME[s.stopFlow] ?? '';
   $('chkErrReason').textContent = `原因：${ERR[s.stopErr] ?? 'コード' + s.stopErr}`;
@@ -583,7 +594,13 @@ function onStatus(dv){
     synced = true; syncSlow = false; clearTimeout(syncTimer);
     if (st.route !== s.route){ s.route = st.route; s.decided = false; }
     const ph = AUTO_PHASE[st.flow];
+    s.resume = false;
     if (st.mode === 2 && ph){ s.mode = 2; s.decided = true; s.autoPhase = ph; s.pause = st.flow === 10 ? 1 : 0; }
+    else if (st.mode === 2 && ((st.flow === FLOW_PROTECT && resumableErr(st.err)) || st.flow === FLOW_RECOVER_CHECK)){
+      // 自動運転中の保護停止（その復帰時チェック）の途中でつなぎ直した：本機は「自動」のままなので、
+      // 復帰後に自動運転を続けられるよう「自動」で送る（本機が続けなかったときは、停止が終わったところで―に戻す）
+      s.mode = 2; s.decided = true; s.resume = true;
+    }
     else s.mode = null;
     dirty = true;
   }
@@ -597,8 +614,19 @@ function onStatus(dv){
   else if (st.flow === 0 || st.flow === 15) stop = 'chk';
   const stopFlow = stop ? st.flow : null;
   if (stop !== s.stop || (stop && (st.err !== s.stopErr || stopFlow !== s.stopFlow))){
-    if (stop && !s.stop) resetControls();                    // 操作をすべて初期状態に（ルートの決定はそのまま）
-    if (stop === 'estop' || stop === 'abn') s.mode = null;    // 非常停止・異常停止はモードも―に戻す
+    if (stop && !s.stop){
+      // 自動運転中に止まった：保護停止（衝突・人検知）なら、本機は復帰時チェックが正常なら自動運転を続ける
+      s.resume = s.resume || (s.mode === 2 && s.autoPhase === 'run');
+      resetControls();                                       // 操作をすべて初期状態に（ルートの決定はそのまま）
+    }
+    if (stop === 'estop' || (stop === 'abn' && !(st.flow === FLOW_PROTECT && resumableErr(st.err)))) s.resume = false;
+    // 非常停止・異常停止はモードも―に戻す（自動運転を続ける保護停止のあいだは「自動」のまま送る）
+    if (stop === 'estop' || (stop === 'abn' && !s.resume)) s.mode = null;
+    if (!stop && s.stop){
+      // 停止が終わった：本機が自動運転を続けていなければ（スタンバイに戻したなど）、本機に合わせてモードを―に
+      if (s.resume && !(st.mode === 2 && AUTO_PHASE[st.flow])) s.mode = null;
+      s.resume = false;
+    }
     if (stop !== s.stop){
       $('recoverNote').textContent = '';
       $('recheckNote').textContent = '原因を取り除いてから「再チェック」を押してください';
@@ -673,6 +701,7 @@ function onDisconnected(){
   pending.route = pending.auto = pending.mode = null;
   resetControls();
   s.mode = null; s.stop = null; s.stopErr = 0; s.stopFlow = null; s.flow = null;   // ルートの決定はそのまま
+  s.resume = false;                                                                 // つなぎ直したときに本機の状態から決め直す
   if (!wakeWanted()) releaseAwake();
   ['fFlow','fRtk','fBat','fRtt','fErr'].forEach(id => $(id).textContent = '—');
   setStatus(false, '切断されました');
