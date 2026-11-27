@@ -405,6 +405,9 @@ let lastStatusAt = 0;              // 最後に状態データを受け取った
 const stale = {on: false, lastAt: 0, since: 0, step: '', resub: false, busy: false};
 const reconn = {active: false, tries: 0, running: false};   // 途切れを直すための、自動のつなぎ直し
 const linkBad = () => stale.on || reconn.active;
+// 人が「切断」を押した（2026-11-27：屋外試験の 3-1 で、切断の 6 秒後にまたつながっていた）。
+//   立っている間は、「接続」を押すまで途切れの直し（かけ直し・読みに行く・つなぎ直し）を一切しない
+let userDisc = false;
 // synced：つないだあと最初の状態データが届き、画面を本機に合わせた（それまでは操作データを送らない）
 let synced = false, syncSlow = false, syncTimer = null;
 const sentAt = new Float64Array(65536);
@@ -725,13 +728,14 @@ async function setupGatt(dev){
 
 async function connect(){
   try {
+    userDisc = false;                  // 人が「接続」を押した：ここから先は途切れを直してよい
     reconn.active = false; reconn.tries = 0;
     setStatus(false, '検索中…');
     const dev = await navigator.bluetooth.requestDevice({filters: [{services:[SVC]}], optionalServices: [SVC]});
     if (device !== dev){
-      if (device) device.removeEventListener('gattserverdisconnected', onDisconnected);
+      if (device) device.removeEventListener('gattserverdisconnected', onGattDisconnected);
       device = dev;
-      device.addEventListener('gattserverdisconnected', onDisconnected);
+      device.addEventListener('gattserverdisconnected', onGattDisconnected);
     }
     await setupGatt(device);
   } catch(e) {
@@ -750,6 +754,7 @@ function onDisconnected(){
   s.resume = false;                                                                 // つなぎ直したときに本機の状態から決め直す
   stale.on = false; stale.resub = false; stale.busy = false;
   ['fFlow','fRtk','fBat','fRtt','fErr'].forEach(id => $(id).textContent = '—');
+  if (userDisc){ reconn.active = false; reconn.tries = 0; }   // 人が切ったときは、つなぎ直さない
   if (reconn.active){
     setStatus(false, 'つなぎ直しています…');
     render();
@@ -757,13 +762,34 @@ function onDisconnected(){
     return;
   }
   if (!wakeWanted()) releaseAwake();
-  setStatus(false, '切断されました');
+  setStatus(false, userDisc ? '切断しました' : '切断されました');
   render();
 }
+// Bluefy からの「切れた」の知らせ。遅れて届いた古い知らせ（もうつなぎ直した・もう切れた扱いにした）は無視する
+function onGattDisconnected(){
+  if (device && device.gatt.connected) return;      // いまはつながっている：前の切断の知らせ
+  if (!connected && !reconn.active) return;         // 「切断」を押したときに、もう切れた扱いにした
+  onDisconnected();
+}
 $('connectBtn').addEventListener('click', () => {
-  if (reconn.active){ reconn.active = false; reconn.tries = 0; }   // 自動のつなぎ直しをやめて、人の操作に任せる
-  if (device && device.gatt.connected) device.gatt.disconnect();
-  else connect();
+  if (connected || (device && device.gatt.connected)){
+    // 切断：Bluefy の知らせを待たずに、その場で切れた扱いにする（知らせが来ないと、途切れと見てつなぎ直してしまう）
+    userDisc = true;
+    reconn.active = false; reconn.tries = 0;
+    try { if (device && device.gatt.connected) device.gatt.disconnect(); } catch(e) { console.warn(e); }
+    onDisconnected();
+    return;
+  }
+  if (reconn.active || reconn.running){
+    // 自動のつなぎ直しの途中（ボタンは「接続」）：つなぎ直しをやめて、切れたままにする（もう一度押すと機器を選ぶ）
+    userDisc = true;
+    reconn.active = false; reconn.tries = 0;
+    stale.step = '';
+    setStatus(false, '切断しました');
+    render();
+    return;
+  }
+  connect();
 });
 
 // ---------------- 状態データの途切れ ----------------
@@ -793,21 +819,25 @@ async function reconnectLoop(){
   if (reconn.running) return;        // 二重に動かさない
   reconn.running = true;
   try {
-    while (reconn.active && reconn.tries < RECONNECT_TRIES && device){
+    while (reconn.active && !userDisc && reconn.tries < RECONNECT_TRIES && device){
       reconn.tries++;
       stale.step = `つなぎ直しています…（${reconn.tries} / ${RECONNECT_TRIES} 回目）`;
       render();
       await sleep(800);
-      if (!reconn.active) return;
+      if (!reconn.active || userDisc) return;
       try {
         await setupGatt(device);
+        if (userDisc){               // つないでいる途中で「切断」が押された：切れたままにする
+          try { if (device.gatt.connected) device.gatt.disconnect(); } catch(e2) {}
+          onDisconnected();
+        }
         return;                      // つながった：状態が届けば reconn.active を下ろす（onStatus）。届かなければ staleCheck がもう一度
       } catch(e) {
         console.warn('つなぎ直せない', e);
         try { if (device.gatt.connected) device.gatt.disconnect(); } catch(e2) {}
       }
     }
-    if (reconn.active){
+    if (reconn.active && !userDisc){
       reconn.active = false; reconn.tries = 0;
       stale.step = '';
       console.warn('本機とつなぎ直せなかった：「接続」を押してもらう');
@@ -821,6 +851,7 @@ async function reconnectLoop(){
 
 // BLE を切ってつなぎ直す（切れたら onDisconnected → reconnectLoop）
 function restartLink(){
+  if (userDisc) return;              // 人が切ったときはつなぎ直さない
   reconn.active = true;
   stale.step = 'つなぎ直しています…';
   render();
@@ -834,6 +865,7 @@ function restartLink(){
 
 async function staleCheck(){
   if (document.hidden) return;       // 裏に回っている間は直さない（表に戻ったら、かけ直しから始める）
+  if (userDisc) return;              // 人が「切断」を押した：「接続」を押すまで直さない
   if (!connected || !stChar || stale.busy) { renderStale(); return; }
   const now = performance.now();
   if (!synced){
