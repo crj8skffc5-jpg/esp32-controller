@@ -318,6 +318,16 @@
       <div class="msg">本機の非常停止ボタンが押されています。<br>安全を確認してから、本機のボタンを解除してください。</div>
     </div>
   </section>
+
+  <!-- 本機から状態が届かない（BLE はつながっている）：操作不可。自動で直す -->
+  <section id="pStale" class="panel">
+    <div class="col">
+      <div class="stopTitle">本機から状態が届いていません</div>
+      <div class="reason" id="staleAge">—</div>
+      <div class="msg" id="staleStep">直しています…</div>
+      <div class="lbl">本機が止まっていても、ここでは分かりません。操作は止めています（移動は中立）。<br>直らないときは「切断」→「接続」を押してください</div>
+    </div>
+  </section>
 </main>
 
 <footer>
@@ -386,6 +396,15 @@ const manualCheck = () => s.mode === 1 && (pending.mode !== null || s.flow === 2
 const cnt = {decide:0, up:0, down:0, start:0, end:0, recover:0};
 
 let device = null, ctrlChar = null, connected = false, busy = false, timer = null, seq = 0, stopReq = false;
+// 状態データの途切れ（2026-11-27：Bluefy が裏に回って戻ったあと、操作データは届くのに状態データが届かなくなった）
+//   STALE_MS 届かなければ操作を止めて、通知のかけ直し → 読みに行く → STALE_RECONNECT_MS でつなぎ直し、と自動で直す
+const STALE_MS = 1500, STALE_RECONNECT_MS = 5000, STALE_POLL_MS = 250, RECONNECT_TRIES = 3;
+let stChar = null;                 // 状態データの特性（通知のかけ直し・読みに行くのに使う）
+let lastStatusAt = 0;              // 最後に状態データを受け取った時刻（performance.now()）
+// lastAt：途切れたときの最後の状態の時刻（表示用） since：直し始めた時刻（つなぎ直しまでの時間を数える）
+const stale = {on: false, lastAt: 0, since: 0, step: '', resub: false, busy: false};
+const reconn = {active: false, tries: 0, running: false};   // 途切れを直すための、自動のつなぎ直し
+const linkBad = () => stale.on || reconn.active;
 // synced：つないだあと最初の状態データが届き、画面を本機に合わせた（それまでは操作データを送らない）
 let synced = false, syncSlow = false, syncTimer = null;
 const sentAt = new Float64Array(65536);
@@ -400,7 +419,7 @@ if (!navigator.bluetooth) $('warn').style.display = 'block';
 
 // そのモードに今切り替えられるか
 function canSelectMode(v){
-  if (!connected || !synced || s.stop || isPaused()) return false;   // 未接続・読み込み中・停止中・一時停止中は切り替え不可
+  if (!connected || !synced || s.stop || isPaused() || linkBad()) return false;   // 未接続・読み込み中・停止中・一時停止中・状態が届かないときは切り替え不可
   if (v === 0) return true;                                         // スタンバイはいつでも
   if (s.mode === 2 && s.autoPhase === 'done') return false;         // 作業完了：先にスタンバイに戻す
   return s.mode !== null && s.decided;                              // 手動・自動はスタンバイでルートを決定してから
@@ -435,14 +454,16 @@ function releaseAwake(){
 
 // ---------------- 画面の反映 ----------------
 function render(){
-  // BLE が切れているときは遠隔操作の画面
-  const view = !connected ? 'remote' : s.stop ?? (s.mode === null ? 'none' : ['standby','manual','auto'][s.mode]);
+  // 状態が届かない（つなぎ直し中も）ときはその画面、BLE が切れているときは遠隔操作の画面
+  const view = linkBad() ? 'stale' : !connected ? 'remote'
+             : s.stop ?? (s.mode === null ? 'none' : ['standby','manual','auto'][s.mode]);
   const paused = isPaused(), mcheck = manualCheck();
-  $('main').classList.toggle('stopped', !!s.stop || view === 'remote');
+  $('main').classList.toggle('stopped', !!s.stop || view === 'remote' || view === 'stale');
   [['pNone','none'], ['pStandby','standby'], ['pManual','manual'], ['pAuto','auto'],
-   ['pAbn','abn'], ['pEstop','estop'], ['pChk','chk'], ['pChkErr','chkerr'], ['pRemote','remote']]
+   ['pAbn','abn'], ['pEstop','estop'], ['pChk','chk'], ['pChkErr','chkerr'], ['pRemote','remote'], ['pStale','stale']]
     .forEach(([id, v]) => $(id).classList.toggle('show', view === v));
   renderRemote();
+  renderStale();
 
   // モード切替
   $('modeName').textContent = s.mode === null ? '―' : MODE_NAME[s.mode];
@@ -538,7 +559,8 @@ function buildFrame(){
   if (!document.hidden && !stopReq) flags |= 0x01;   // bit0 操作有効
   if (stopReq) flags |= 0x02;                        // bit1 停止要求
   buf[3] = flags;
-  const driving = s.mode === 1 && !s.stop && !isPaused() && !manualCheck();   // 一時停止中・チェック中は移動を中立で送る
+  // 一時停止中・チェック中・状態が届かないときは移動を中立で送る
+  const driving = s.mode === 1 && !s.stop && !isPaused() && !manualCheck() && !linkBad();
   dv.setInt8(4, driving ? s.fwd : 0);
   dv.setInt8(5, driving ? s.turn : 0);
   buf[6] = s.mode ?? 0;          // ―はスタンバイとして送る
@@ -572,6 +594,12 @@ async function sendFrame(){
 
 function onStatus(dv){
   if (dv.byteLength < 13 || !ctrlChar) return;
+  lastStatusAt = performance.now();
+  if (stale.on){                     // また届くようになった：本機の今の状態（停止なら「復帰」）の画面に戻す
+    console.info(`状態がまた届くようになった（${((lastStatusAt - stale.lastAt) / 1000).toFixed(1)} 秒途切れていた）`);
+    stale.on = false; stale.resub = false; stale.step = '';
+  }
+  reconn.active = false; reconn.tries = 0;
   const st = {
     mode: dv.getUint8(1), flow: dv.getUint8(2), route: dv.getUint8(3), err: dv.getUint8(4),
     rtk: dv.getUint8(5), volt: dv.getUint16(6, true), seq: dv.getUint16(9, true), age: dv.getUint16(11, true)
@@ -666,28 +694,46 @@ function onStatus(dv){
   if (dirty) render();
 }
 
+const onStatusEvent = e => onStatus(e.target.value);
+
+// 選んだ機器につなぎ、特性を用意して送り始める（「接続」と、途切れを直すときのつなぎ直しで使う）
+async function setupGatt(dev){
+  setStatus(false, '接続中…');
+  const server = await withTimeout(dev.gatt.connect(), 10000);
+  const service = await server.getPrimaryService(SVC);
+  synced = false; syncSlow = false;
+  const ctrl = await service.getCharacteristic(CTRL);
+  const st = await service.getCharacteristic(STATUS);
+  ctrlChar = ctrl;
+  if (stChar && stChar !== st) stChar.removeEventListener('characteristicvaluechanged', onStatusEvent);
+  stChar = st;
+  stChar.removeEventListener('characteristicvaluechanged', onStatusEvent);   // 同じ特性に二重に付けない
+  stChar.addEventListener('characteristicvaluechanged', onStatusEvent);
+  await stChar.startNotifications();
+  lastStatusAt = performance.now();
+  stale.on = false; stale.resub = false; stale.step = '';
+  stopReq = false;
+  connected = true;
+  setStatus(true, dev.name || '接続済み');
+  clearInterval(timer);
+  timer = setInterval(sendFrame, SEND_INTERVAL_MS);
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { if (connected && !synced){ syncSlow = true; render(); } }, 3000);
+  keepAwake();
+  render();
+}
+
 async function connect(){
   try {
+    reconn.active = false; reconn.tries = 0;
     setStatus(false, '検索中…');
-    device = await navigator.bluetooth.requestDevice({filters: [{services:[SVC]}], optionalServices: [SVC]});
-    device.addEventListener('gattserverdisconnected', onDisconnected);
-    setStatus(false, '接続中…');
-    const server = await device.gatt.connect();
-    const service = await server.getPrimaryService(SVC);
-    synced = false; syncSlow = false;
-    const ctrl = await service.getCharacteristic(CTRL);
-    const stChar = await service.getCharacteristic(STATUS);
-    ctrlChar = ctrl;
-    stChar.addEventListener('characteristicvaluechanged', e => onStatus(e.target.value));
-    await stChar.startNotifications();
-    stopReq = false;
-    connected = true;
-    setStatus(true, device.name || '接続済み');
-    timer = setInterval(sendFrame, SEND_INTERVAL_MS);
-    clearTimeout(syncTimer);
-    syncTimer = setTimeout(() => { if (connected && !synced){ syncSlow = true; render(); } }, 3000);
-    keepAwake();
-    render();
+    const dev = await navigator.bluetooth.requestDevice({filters: [{services:[SVC]}], optionalServices: [SVC]});
+    if (device !== dev){
+      if (device) device.removeEventListener('gattserverdisconnected', onDisconnected);
+      device = dev;
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+    }
+    await setupGatt(device);
   } catch(e) {
     console.warn(e);
     setStatus(false, e.name === 'NotFoundError' ? '未接続' : '接続失敗');
@@ -702,15 +748,138 @@ function onDisconnected(){
   resetControls();
   s.mode = null; s.stop = null; s.stopErr = 0; s.stopFlow = null; s.flow = null;   // ルートの決定はそのまま
   s.resume = false;                                                                 // つなぎ直したときに本機の状態から決め直す
-  if (!wakeWanted()) releaseAwake();
+  stale.on = false; stale.resub = false; stale.busy = false;
   ['fFlow','fRtk','fBat','fRtt','fErr'].forEach(id => $(id).textContent = '—');
+  if (reconn.active){
+    setStatus(false, 'つなぎ直しています…');
+    render();
+    reconnectLoop();
+    return;
+  }
+  if (!wakeWanted()) releaseAwake();
   setStatus(false, '切断されました');
   render();
 }
 $('connectBtn').addEventListener('click', () => {
+  if (reconn.active){ reconn.active = false; reconn.tries = 0; }   // 自動のつなぎ直しをやめて、人の操作に任せる
   if (device && device.gatt.connected) device.gatt.disconnect();
   else connect();
 });
+
+// ---------------- 状態データの途切れ ----------------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// 返事が来ないまま止まらないように、待つ時間を決める（Bluefy で BLE の呼び出しが返ってこないことがある）
+const withTimeout = (p, ms) => Promise.race([p, sleep(ms).then(() => { throw new Error('timeout ' + ms + 'ms'); })]);
+
+// 通知をかけ直す（Bluefy が裏に回って戻ったあと、届かなくなることがある）
+async function resubscribe(why){
+  if (!stChar || !connected) return;
+  console.info('状態の通知をかけ直す：' + why);
+  try { await withTimeout(stChar.stopNotifications(), 1000); } catch(e) {}
+  try { await withTimeout(stChar.startNotifications(), 1500); } catch(e) { console.warn('通知をかけ直せない', e); }
+}
+
+// 本機の状態を読みに行く（本機の STATUS が「読み取り」に対応していれば、通知が来なくても状態が分かる）
+async function pollStatus(){
+  if (!stChar || !connected) return;
+  try {
+    const v = await withTimeout(stChar.readValue(), 1000);
+    if (v && v.byteLength >= 13) onStatus(v);
+  } catch(e) {}                      // 古いスケッチ（通知だけ）は読めない：かけ直し・つなぎ直しで直す
+}
+
+// 途切れを直すための、自動のつなぎ直し（機器を選ぶ画面は出さない）
+async function reconnectLoop(){
+  if (reconn.running) return;        // 二重に動かさない
+  reconn.running = true;
+  try {
+    while (reconn.active && reconn.tries < RECONNECT_TRIES && device){
+      reconn.tries++;
+      stale.step = `つなぎ直しています…（${reconn.tries} / ${RECONNECT_TRIES} 回目）`;
+      render();
+      await sleep(800);
+      if (!reconn.active) return;
+      try {
+        await setupGatt(device);
+        return;                      // つながった：状態が届けば reconn.active を下ろす（onStatus）。届かなければ staleCheck がもう一度
+      } catch(e) {
+        console.warn('つなぎ直せない', e);
+        try { if (device.gatt.connected) device.gatt.disconnect(); } catch(e2) {}
+      }
+    }
+    if (reconn.active){
+      reconn.active = false; reconn.tries = 0;
+      stale.step = '';
+      console.warn('本機とつなぎ直せなかった：「接続」を押してもらう');
+      setStatus(false, 'つなぎ直せませんでした（「接続」を押す）');
+      render();
+    }
+  } finally {
+    reconn.running = false;
+  }
+}
+
+// BLE を切ってつなぎ直す（切れたら onDisconnected → reconnectLoop）
+function restartLink(){
+  reconn.active = true;
+  stale.step = 'つなぎ直しています…';
+  render();
+  try {
+    if (device && device.gatt.connected) device.gatt.disconnect();
+    else onDisconnected();
+  } catch(e) { onDisconnected(); }
+  // 切断の知らせが来ないとき（もう切れていた）の保険
+  setTimeout(() => { if (reconn.active && connected && device && !device.gatt.connected) onDisconnected(); }, 1500);
+}
+
+async function staleCheck(){
+  if (document.hidden) return;       // 裏に回っている間は直さない（表に戻ったら、かけ直しから始める）
+  if (!connected || !stChar || stale.busy) { renderStale(); return; }
+  const now = performance.now();
+  if (!synced){
+    // つなぎ直したのに状態が届かない：もう一度つなぎ直す（回数は reconnectLoop が数える）
+    if (reconn.active && !reconn.running && now - lastStatusAt >= STALE_RECONNECT_MS) restartLink();
+    renderStale();
+    return;
+  }
+  if (now - lastStatusAt < STALE_MS) return;
+  if (!stale.on){
+    stale.on = true; stale.lastAt = lastStatusAt; stale.since = now; stale.resub = false;
+    console.warn('本機から状態が届いていない：操作を止めて直す');
+    resetMove(); cancelHolds();
+    render();
+  }
+  stale.busy = true;
+  try {
+    // 最後に届いてから STALE_RECONNECT_MS（裏から戻ったときは、直し始めてから同じだけ）たっても届かなければつなぎ直す
+    if (now - stale.since >= STALE_RECONNECT_MS - STALE_MS){
+      // 通知のかけ直し・読みに行っても届かない：つなぎ直す（手動なら本機は通信途絶で異常停止になる）
+      console.warn(`${((now - stale.lastAt) / 1000).toFixed(1)} 秒届かない：つなぎ直す`);
+      reconn.tries = 0;
+      restartLink();
+      return;
+    }
+    if (!stale.resub){
+      stale.resub = true;
+      stale.step = '通知をかけ直しています…';
+      renderStale();
+      await resubscribe('1.5 秒届かない');
+    }
+    stale.step = '本機の状態を読みに行っています…';
+    renderStale();
+    await pollStatus();
+  } finally {
+    stale.busy = false;
+  }
+}
+setInterval(staleCheck, STALE_POLL_MS);
+
+function renderStale(){
+  if (!linkBad()) return;
+  const age = (performance.now() - (stale.lastAt || lastStatusAt)) / 1000;
+  $('staleAge').textContent = `最後に届いてから ${age.toFixed(1)} 秒`;
+  $('staleStep').textContent = stale.step || '直しています…';
+}
 
 // 画面が裏に回ったら停止要求を送る（自動のときは送らない：自動運転は通信が切れても止めない）。
 // 表に戻ったら、画面を消さない設定をかけ直す
@@ -720,6 +889,8 @@ document.addEventListener('visibilitychange', () => {
   } else {
     stopReq = false;
     keepAwake();
+    // 裏に回って戻ると、本機からの状態の通知が届かなくなることがある（2026-11-27 の屋外試験）ので、かけ直して読みに行く
+    if (connected && stChar){ resubscribe('Bluefy に戻った').then(pollStatus); }
     // 裏に回ると iPhone が遠隔の接続を切るので、表に戻ったらつなぎ直す（20 秒以上何も届いていなければ作り直す）
     if (rm.ws && Date.now() - rm.rxAt > 20000) remoteStop();
     remoteStart();
